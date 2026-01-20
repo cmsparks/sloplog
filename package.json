@@ -1,6 +1,6 @@
 {
   "name": "wevt",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A TypeScript library for constructing wide events",
   "type": "module",
   "main": "dist/index.js",
