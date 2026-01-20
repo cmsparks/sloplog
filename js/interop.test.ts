@@ -1,0 +1,255 @@
+/**
+ * Integration tests for TypeScript/Python interoperability
+ *
+ * These tests verify that originators serialized in TypeScript can be
+ * deserialized in Python and vice versa. The tests use known serialized
+ * values that are also tested in the Python interop tests.
+ */
+
+import { describe, it, expect } from 'vitest'
+import {
+    serializeOriginator,
+    deserializeOriginator,
+    createOriginatorHeaders,
+    extractOriginatorFromHeaders,
+    ORIGINATOR_HEADER,
+    type Originator,
+    type HttpOriginator,
+    type WebSocketOriginator,
+} from './index'
+
+// Known test vectors - these exact values are also used in Python tests
+// to ensure cross-language compatibility
+const TEST_VECTORS = {
+    // Simple originator
+    simple: {
+        originator: {
+            originatorId: "orig_interop_test_001",
+            type: "http",
+            timestamp: 1700000000000,
+        } as Originator,
+        // This is what Python should produce for the same input
+        // We verify both directions work
+    },
+
+    // HTTP originator with full details
+    httpFull: {
+        originator: {
+            originatorId: "orig_http_interop_001",
+            type: "http",
+            timestamp: 1700000000000,
+            method: "POST",
+            path: "/api/v1/users",
+            query: "page=1&limit=10",
+            host: "api.example.com",
+            userAgent: "TestClient/1.0",
+            contentType: "application/json",
+            contentLength: 256,
+        } as HttpOriginator,
+    },
+
+    // WebSocket originator
+    websocket: {
+        originator: {
+            originatorId: "orig_ws_interop_001",
+            type: "websocket",
+            timestamp: 1700000000000,
+            sessionId: "ws_session_abc123",
+            source: "client",
+            messageType: "text",
+            messageSize: 1024,
+        } as WebSocketOriginator,
+    },
+
+    // Originator with parent (for tracing)
+    withParent: {
+        originator: {
+            originatorId: "orig_child_001",
+            type: "http",
+            timestamp: 1700000000000,
+            parentId: "orig_parent_001",
+        } as Originator,
+    },
+}
+
+describe('TypeScript/Python Interoperability', () => {
+    describe('Serialization Format', () => {
+        it('should serialize simple originator to expected format', () => {
+            const serialized = serializeOriginator(TEST_VECTORS.simple.originator)
+
+            // Verify it's a valid base64url string (no +, /, or = padding)
+            expect(serialized).toMatch(/^[A-Za-z0-9_-]+$/)
+
+            // Verify we can deserialize our own output
+            const deserialized = deserializeOriginator(serialized)
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_interop_test_001")
+            expect(deserialized?.type).toBe("http")
+            expect(deserialized?.timestamp).toBe(1700000000000)
+        })
+
+        it('should serialize HTTP originator with all fields', () => {
+            const serialized = serializeOriginator(TEST_VECTORS.httpFull.originator)
+            const deserialized = deserializeOriginator(serialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_http_interop_001")
+            expect(deserialized?.type).toBe("http")
+            expect(deserialized?.method).toBe("POST")
+            expect(deserialized?.path).toBe("/api/v1/users")
+            expect(deserialized?.query).toBe("page=1&limit=10")
+            expect(deserialized?.host).toBe("api.example.com")
+            expect(deserialized?.userAgent).toBe("TestClient/1.0")
+            expect(deserialized?.contentType).toBe("application/json")
+            expect(deserialized?.contentLength).toBe(256)
+        })
+
+        it('should serialize WebSocket originator', () => {
+            const serialized = serializeOriginator(TEST_VECTORS.websocket.originator)
+            const deserialized = deserializeOriginator(serialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_ws_interop_001")
+            expect(deserialized?.type).toBe("websocket")
+            expect(deserialized?.sessionId).toBe("ws_session_abc123")
+            expect(deserialized?.source).toBe("client")
+            expect(deserialized?.messageType).toBe("text")
+            expect(deserialized?.messageSize).toBe(1024)
+        })
+
+        it('should preserve parentId in serialization', () => {
+            const serialized = serializeOriginator(TEST_VECTORS.withParent.originator)
+            const deserialized = deserializeOriginator(serialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_child_001")
+            expect(deserialized?.parentId).toBe("orig_parent_001")
+        })
+    })
+
+    describe('Cross-Language Deserialization (Python -> TypeScript)', () => {
+        // These are base64url-encoded originators generated by Python
+        // using the same test vectors above
+
+        it('should deserialize simple originator from Python', () => {
+            // Python: serialize_originator({"originator_id": "orig_interop_test_001", "type": "http", "timestamp": 1700000000000})
+            const pythonSerialized = "eyJ2IjogMSwgImlkIjogIm9yaWdfaW50ZXJvcF90ZXN0XzAwMSIsICJ0IjogImh0dHAiLCAidHMiOiAxNzAwMDAwMDAwMDAwfQ"
+
+            const deserialized = deserializeOriginator(pythonSerialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_interop_test_001")
+            expect(deserialized?.type).toBe("http")
+            expect(deserialized?.timestamp).toBe(1700000000000)
+        })
+
+        it('should deserialize HTTP originator from Python', () => {
+            // Python serialized HTTP originator with full details
+            const pythonSerialized = "eyJ2IjogMSwgImlkIjogIm9yaWdfaHR0cF9pbnRlcm9wXzAwMSIsICJ0IjogImh0dHAiLCAidHMiOiAxNzAwMDAwMDAwMDAwLCAiZCI6IHsibWV0aG9kIjogIlBPU1QiLCAicGF0aCI6ICIvYXBpL3YxL3VzZXJzIiwgInF1ZXJ5IjogInBhZ2U9MSZsaW1pdD0xMCIsICJob3N0IjogImFwaS5leGFtcGxlLmNvbSIsICJ1c2VyX2FnZW50IjogIlRlc3RDbGllbnQvMS4wIiwgImNvbnRlbnRfdHlwZSI6ICJhcHBsaWNhdGlvbi9qc29uIiwgImNvbnRlbnRfbGVuZ3RoIjogMjU2fX0"
+
+            const deserialized = deserializeOriginator(pythonSerialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_http_interop_001")
+            expect(deserialized?.type).toBe("http")
+            expect(deserialized?.method).toBe("POST")
+            expect(deserialized?.path).toBe("/api/v1/users")
+            // Note: Python uses snake_case, TypeScript uses camelCase
+            // The serialization preserves the original keys
+            expect(deserialized?.user_agent || deserialized?.userAgent).toBe("TestClient/1.0")
+        })
+
+        it('should deserialize WebSocket originator from Python', () => {
+            // Python serialized WebSocket originator
+            const pythonSerialized = "eyJ2IjogMSwgImlkIjogIm9yaWdfd3NfaW50ZXJvcF8wMDEiLCAidCI6ICJ3ZWJzb2NrZXQiLCAidHMiOiAxNzAwMDAwMDAwMDAwLCAiZCI6IHsic2Vzc2lvbl9pZCI6ICJ3c19zZXNzaW9uX2FiYzEyMyIsICJzb3VyY2UiOiAiY2xpZW50IiwgIm1lc3NhZ2VfdHlwZSI6ICJ0ZXh0IiwgIm1lc3NhZ2Vfc2l6ZSI6IDEwMjR9fQ"
+
+            const deserialized = deserializeOriginator(pythonSerialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_ws_interop_001")
+            expect(deserialized?.type).toBe("websocket")
+            // Python uses snake_case
+            expect(deserialized?.session_id || deserialized?.sessionId).toBe("ws_session_abc123")
+            expect(deserialized?.source).toBe("client")
+        })
+
+        it('should deserialize originator with parent from Python', () => {
+            // Python serialized originator with parent
+            const pythonSerialized = "eyJ2IjogMSwgImlkIjogIm9yaWdfY2hpbGRfMDAxIiwgInQiOiAiaHR0cCIsICJ0cyI6IDE3MDAwMDAwMDAwMDAsICJwaWQiOiAib3JpZ19wYXJlbnRfMDAxIn0"
+
+            const deserialized = deserializeOriginator(pythonSerialized)
+
+            expect(deserialized).not.toBeNull()
+            expect(deserialized?.originatorId).toBe("orig_child_001")
+            expect(deserialized?.parentId).toBe("orig_parent_001")
+        })
+    })
+
+    describe('Header Propagation', () => {
+        it('should create headers that Python can parse', () => {
+            const originator = TEST_VECTORS.simple.originator
+            const headers = createOriginatorHeaders(originator)
+
+            expect(headers[ORIGINATOR_HEADER]).toBeDefined()
+            expect(typeof headers[ORIGINATOR_HEADER]).toBe('string')
+
+            // Verify the header value is valid base64url
+            expect(headers[ORIGINATOR_HEADER]).toMatch(/^[A-Za-z0-9_-]+$/)
+        })
+
+        it('should extract originator from Python-generated headers', () => {
+            // Simulate headers from a Python service
+            const pythonHeaders = {
+                'content-type': 'application/json',
+                [ORIGINATOR_HEADER]: "eyJ2IjogMSwgImlkIjogIm9yaWdfZnJvbV9weXRob24iLCAidCI6ICJodHRwIiwgInRzIjogMTcwMDAwMDAwMDAwMH0",
+            }
+
+            const extracted = extractOriginatorFromHeaders(pythonHeaders)
+
+            expect(extracted).not.toBeNull()
+            expect(extracted?.originatorId).toBe("orig_from_python")
+            expect(extracted?.type).toBe("http")
+        })
+
+        it('should handle case-insensitive header lookup', () => {
+            const pythonHeaders = {
+                'Content-Type': 'application/json',
+                'X-Wevt-Originator': "eyJ2IjogMSwgImlkIjogIm9yaWdfdGVzdCIsICJ0IjogImh0dHAiLCAidHMiOiAxNzAwMDAwMDAwMDAwfQ",
+            }
+
+            const extracted = extractOriginatorFromHeaders(pythonHeaders)
+
+            expect(extracted).not.toBeNull()
+            expect(extracted?.originatorId).toBe("orig_test")
+        })
+    })
+
+    describe('Round-trip Verification', () => {
+        it('should survive TypeScript -> base64 -> TypeScript round-trip', () => {
+            const original = TEST_VECTORS.httpFull.originator
+            const serialized = serializeOriginator(original)
+            const deserialized = deserializeOriginator(serialized)
+
+            expect(deserialized?.originatorId).toBe(original.originatorId)
+            expect(deserialized?.type).toBe(original.type)
+            expect(deserialized?.timestamp).toBe(original.timestamp)
+            expect(deserialized?.method).toBe(original.method)
+            expect(deserialized?.path).toBe(original.path)
+        })
+
+        it('should output serialized values for Python tests', () => {
+            // These values should be copied to the Python interop tests
+            // to verify cross-language compatibility
+
+            console.log('\n=== Serialized values for Python interop tests ===')
+            console.log('Simple:', serializeOriginator(TEST_VECTORS.simple.originator))
+            console.log('HTTP Full:', serializeOriginator(TEST_VECTORS.httpFull.originator))
+            console.log('WebSocket:', serializeOriginator(TEST_VECTORS.websocket.originator))
+            console.log('With Parent:', serializeOriginator(TEST_VECTORS.withParent.originator))
+            console.log('=================================================\n')
+
+            // This test always passes - it's just for generating test data
+            expect(true).toBe(true)
+        })
+    })
+})

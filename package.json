@@ -1,0 +1,45 @@
+{
+  "name": "wevt",
+  "version": "0.0.1",
+  "description": "A TypeScript library for constructing wide events",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "keywords": [
+    "wide-events",
+    "logging",
+    "observability",
+    "tracing",
+    "structured-logging"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/wevt.git"
+  },
+  "homepage": "https://github.com/YOUR_USERNAME/wevt#readme",
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/wevt/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.9",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
