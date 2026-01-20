@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wevt-partials",
+  "definitions": {
+    "user": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "user"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "subscriptionLevel": {
+          "type": "string"
+        },
+        "dateJoined": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "userId",
+        "subscriptionLevel",
+        "dateJoined"
+      ],
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "session"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "number"
+        },
+        "startedAt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "sessionId",
+        "messages",
+        "startedAt"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        },
+        "code": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "response"
+        },
+        "statusCode": {
+          "type": "number"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "contentLength": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "statusCode",
+        "durationMs"
+      ],
+      "additionalProperties": false
+    },
+    "db_query": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "db_query"
+        },
+        "query": {
+          "type": "string"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "rowCount": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "query",
+        "durationMs"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

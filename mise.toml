@@ -1,3 +1,76 @@
 [tools]
 node = "22"
 python = "3.12"
+
+[tasks.install]
+description = "Install all dependencies"
+run = """
+npm install
+pip install -e ".[test]"
+pip install build twine
+"""
+
+[tasks.build]
+description = "Build both packages"
+depends = ["build:js", "build:py"]
+
+[tasks."build:js"]
+description = "Build TypeScript package"
+run = "npm run build"
+
+[tasks."build:py"]
+description = "Build Python package"
+run = "python -m build"
+
+[tasks.test]
+description = "Run all tests"
+depends = ["test:js", "test:py"]
+
+[tasks."test:js"]
+description = "Run TypeScript tests"
+run = "npm test"
+
+[tasks."test:py"]
+description = "Run Python tests"
+run = "pytest"
+
+[tasks."test:watch"]
+description = "Run TypeScript tests in watch mode"
+run = "npm run test:watch"
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = """
+rm -rf dist
+rm -rf python/wevt/__pycache__
+rm -rf python/tests/__pycache__
+rm -rf *.egg-info
+"""
+
+[tasks.publish]
+description = "Publish both packages"
+depends = ["publish:js", "publish:py"]
+
+[tasks."publish:js"]
+description = "Publish to npm"
+depends = ["test:js"]
+run = "npm publish"
+
+[tasks."publish:py"]
+description = "Publish to PyPI"
+depends = ["test:py", "build:py"]
+run = "twine upload dist/*"
+
+[tasks."publish:js:dry"]
+description = "Dry run npm publish"
+depends = ["test:js"]
+run = "npm publish --dry-run"
+
+[tasks."publish:py:dry"]
+description = "Check Python package before publishing"
+depends = ["build:py"]
+run = "twine check dist/*"
+
+[tasks.codegen]
+description = "Generate types from schema definitions"
+run = "npx tsx codegen/cli.ts schema/partials.ts"

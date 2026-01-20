@@ -5,10 +5,6 @@ import {
     CompositeCollector,
     FilteredCollector,
     FileCollector,
-    serializeOriginator,
-    deserializeOriginator,
-    createOriginatorHeaders,
-    extractOriginatorFromHeaders,
     createChildOriginator,
     createCronOriginator,
     createOriginatorFromRequest,
@@ -324,99 +320,6 @@ describe('FileCollector', () => {
         await fileCollector.close()
 
         expect(writtenData).toHaveLength(1)
-    })
-})
-
-describe('Originator Serialization', () => {
-    it('should serialize and deserialize an originator', () => {
-        const originator: Originator = {
-            originatorId: "orig_test123",
-            type: "http",
-            timestamp: 1234567890000,
-        }
-
-        const serialized = serializeOriginator(originator)
-        expect(typeof serialized).toBe('string')
-        expect(serialized.length).toBeGreaterThan(0)
-
-        const deserialized = deserializeOriginator(serialized)
-        expect(deserialized).not.toBeNull()
-        expect(deserialized?.originatorId).toBe("orig_test123")
-        expect(deserialized?.type).toBe("http")
-        expect(deserialized?.timestamp).toBe(1234567890000)
-    })
-
-    it('should preserve additional data in serialization', () => {
-        const originator: HttpOriginator = {
-            originatorId: "orig_test123",
-            type: "http",
-            timestamp: 1234567890000,
-            method: "POST",
-            path: "/api/users",
-            host: "example.com",
-        }
-
-        const serialized = serializeOriginator(originator)
-        const deserialized = deserializeOriginator(serialized)
-
-        expect(deserialized?.method).toBe("POST")
-        expect(deserialized?.path).toBe("/api/users")
-        expect(deserialized?.host).toBe("example.com")
-    })
-
-    it('should preserve parentId in serialization', () => {
-        const originator: Originator = {
-            originatorId: "orig_child",
-            type: "http",
-            timestamp: 1234567890000,
-            parentId: "orig_parent",
-        }
-
-        const serialized = serializeOriginator(originator)
-        const deserialized = deserializeOriginator(serialized)
-
-        expect(deserialized?.parentId).toBe("orig_parent")
-    })
-
-    it('should return null for invalid serialized data', () => {
-        expect(deserializeOriginator("invalid")).toBeNull()
-        expect(deserializeOriginator("")).toBeNull()
-    })
-})
-
-describe('Originator Headers', () => {
-    it('should create headers with originator', () => {
-        const originator: Originator = {
-            originatorId: "orig_test123",
-            type: "http",
-            timestamp: 1234567890000,
-        }
-
-        const headers = createOriginatorHeaders(originator)
-
-        expect(headers[ORIGINATOR_HEADER]).toBeDefined()
-        expect(typeof headers[ORIGINATOR_HEADER]).toBe('string')
-    })
-
-    it('should extract originator from headers', () => {
-        const originator: Originator = {
-            originatorId: "orig_test123",
-            type: "http",
-            timestamp: 1234567890000,
-        }
-
-        const headers = createOriginatorHeaders(originator)
-        const extracted = extractOriginatorFromHeaders(headers)
-
-        expect(extracted).not.toBeNull()
-        expect(extracted?.originatorId).toBe("orig_test123")
-    })
-
-    it('should return null when no originator header present', () => {
-        const headers = { "content-type": "application/json" }
-        const extracted = extractOriginatorFromHeaders(headers)
-
-        expect(extracted).toBeNull()
     })
 })
 

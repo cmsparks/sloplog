@@ -14,10 +14,6 @@ from wevt import (
     Service,
     HttpOriginator,
     Originator,
-    serialize_originator,
-    deserialize_originator,
-    create_originator_headers,
-    extract_originator_from_headers,
     create_child_originator,
     create_cron_originator,
     create_tracing_headers,
@@ -335,94 +331,6 @@ class TestFileCollector:
             assert "test-service" in content
         finally:
             os.unlink(temp_path)
-
-
-class TestOriginatorSerialization:
-    def test_should_serialize_and_deserialize_an_originator(self):
-        originator: Originator = {
-            "originator_id": "orig_test123",
-            "type": "http",
-            "timestamp": 1234567890000,
-        }
-
-        serialized = serialize_originator(originator)
-        assert isinstance(serialized, str)
-        assert len(serialized) > 0
-
-        deserialized = deserialize_originator(serialized)
-        assert deserialized is not None
-        assert deserialized["originator_id"] == "orig_test123"
-        assert deserialized["type"] == "http"
-        assert deserialized["timestamp"] == 1234567890000
-
-    def test_should_preserve_additional_data_in_serialization(self):
-        originator: HttpOriginator = {
-            "originator_id": "orig_test123",
-            "type": "http",
-            "timestamp": 1234567890000,
-            "method": "POST",
-            "path": "/api/users",
-            "host": "example.com",
-        }
-
-        serialized = serialize_originator(originator)
-        deserialized = deserialize_originator(serialized)
-
-        assert deserialized is not None
-        assert deserialized.get("method") == "POST"
-        assert deserialized.get("path") == "/api/users"
-        assert deserialized.get("host") == "example.com"
-
-    def test_should_preserve_parent_id_in_serialization(self):
-        originator: Originator = {
-            "originator_id": "orig_child",
-            "type": "http",
-            "timestamp": 1234567890000,
-            "parent_id": "orig_parent",
-        }
-
-        serialized = serialize_originator(originator)
-        deserialized = deserialize_originator(serialized)
-
-        assert deserialized is not None
-        assert deserialized.get("parent_id") == "orig_parent"
-
-    def test_should_return_none_for_invalid_serialized_data(self):
-        assert deserialize_originator("invalid") is None
-        assert deserialize_originator("") is None
-
-
-class TestOriginatorHeaders:
-    def test_should_create_headers_with_originator(self):
-        originator: Originator = {
-            "originator_id": "orig_test123",
-            "type": "http",
-            "timestamp": 1234567890000,
-        }
-
-        headers = create_originator_headers(originator)
-
-        assert ORIGINATOR_HEADER in headers
-        assert isinstance(headers[ORIGINATOR_HEADER], str)
-
-    def test_should_extract_originator_from_headers(self):
-        originator: Originator = {
-            "originator_id": "orig_test123",
-            "type": "http",
-            "timestamp": 1234567890000,
-        }
-
-        headers = create_originator_headers(originator)
-        extracted = extract_originator_from_headers(headers)
-
-        assert extracted is not None
-        assert extracted["originator_id"] == "orig_test123"
-
-    def test_should_return_none_when_no_originator_header_present(self):
-        headers = {"content-type": "application/json"}
-        extracted = extract_originator_from_headers(headers)
-
-        assert extracted is None
 
 
 class TestOriginatorFactoryFunctions:

@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from typing import TypedDict, Generic, TypeVar, Any, Callable, Literal
 import asyncio
 import aiofiles
-import base64
 import time
 
 
@@ -86,103 +85,10 @@ class CronOriginator(Originator, total=False):
     scheduled_time: int  # Unix timestamp in milliseconds
 
 
-# Header name for propagating originator across services
+# Header name for propagating originator ID across services
 ORIGINATOR_HEADER = "x-wevt-originator"
 # Header name for propagating trace ID across services
 TRACE_ID_HEADER = "x-wevt-trace-id"
-
-
-class SerializedOriginator(TypedDict, total=False):
-    """Serializable originator data for cross-service propagation"""
-
-    v: int  # version
-    id: str
-    t: str  # type
-    ts: int  # timestamp
-    pid: str  # parentId
-    d: dict[str, Any]  # additional data
-
-
-def serialize_originator(originator: Originator) -> str:
-    """Serialize an originator to a base64 string for header propagation"""
-    serialized: SerializedOriginator = {
-        "v": 1,
-        "id": originator.get("originator_id", ""),
-        "t": originator.get("type", ""),
-        "ts": originator.get("timestamp", 0),
-    }
-
-    if parent_id := originator.get("parent_id"):
-        serialized["pid"] = parent_id
-
-    # Collect additional data
-    known_keys = {"originator_id", "type", "timestamp", "parent_id"}
-    extra_data = {k: v for k, v in originator.items() if k not in known_keys}
-    if extra_data:
-        serialized["d"] = extra_data
-
-    json_str = json.dumps(serialized)
-    # Use URL-safe base64 encoding
-    return base64.urlsafe_b64encode(json_str.encode()).decode().rstrip("=")
-
-
-def deserialize_originator(encoded: str) -> Originator | None:
-    """Deserialize an originator from a base64 string"""
-    try:
-        # Restore padding
-        padding = 4 - len(encoded) % 4
-        if padding != 4:
-            encoded += "=" * padding
-
-        json_str = base64.urlsafe_b64decode(encoded).decode()
-        serialized: SerializedOriginator = json.loads(json_str)
-
-        if serialized.get("v") != 1:
-            return None
-
-        result: Originator = {
-            "originator_id": serialized["id"],
-            "type": serialized["t"],
-            "timestamp": serialized["ts"],
-        }
-
-        if pid := serialized.get("pid"):
-            result["parent_id"] = pid
-
-        if extra_data := serialized.get("d"):
-            result.update(extra_data)  # type: ignore
-
-        return result
-    except Exception:
-        return None
-
-
-def create_originator_headers(originator: Originator) -> dict[str, str]:
-    """
-    Create headers dict with originator for outgoing requests.
-
-    Deprecated: Use create_tracing_headers instead for proper trace propagation.
-    """
-    return {ORIGINATOR_HEADER: serialize_originator(originator)}
-
-
-def extract_originator_from_headers(
-    headers: dict[str, str | list[str] | None]
-) -> Originator | None:
-    """
-    Extract originator from incoming request headers.
-    Returns None if no originator header is present or if parsing fails.
-    """
-    # Case-insensitive header lookup
-    header_value = None
-    for key, value in headers.items():
-        if key.lower() == ORIGINATOR_HEADER.lower():
-            header_value = value
-            break
-    if not header_value:
-        return None
-    value = header_value[0] if isinstance(header_value, list) else header_value
-    return deserialize_originator(value)
 
 
 class TracingContext(TypedDict):
@@ -679,10 +585,6 @@ __all__ = [
     # Originator helpers
     "ORIGINATOR_HEADER",
     "TRACE_ID_HEADER",
-    "serialize_originator",
-    "deserialize_originator",
-    "create_originator_headers",
-    "extract_originator_from_headers",
     "create_originator_from_starlette_request",
     "create_originator_from_flask_request",
     "create_child_originator",

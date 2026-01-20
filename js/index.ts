@@ -117,91 +117,10 @@ export interface CronOriginator extends Originator {
     scheduledTime?: number;
 }
 
-/** Header name for propagating originator across services */
+/** Header name for propagating originator ID across services */
 export const ORIGINATOR_HEADER = "x-wevt-originator";
 /** Header name for propagating trace ID across services */
 export const TRACE_ID_HEADER = "x-wevt-trace-id";
-
-/**
- * Serializable originator data for cross-service propagation
- */
-interface SerializedOriginator {
-    v: 1;  // version
-    id: string;
-    t: string;  // type
-    ts: number;  // timestamp
-    pid?: string;  // parentId
-    d?: Record<string, unknown>;  // additional data
-}
-
-/**
- * Serialize an originator to a base64 string for header propagation
- */
-export function serializeOriginator(originator: Originator): string {
-    const { originatorId, type, timestamp, parentId, ...rest } = originator
-    const serialized: SerializedOriginator = {
-        v: 1,
-        id: originatorId,
-        t: type,
-        ts: timestamp,
-        ...(parentId && { pid: parentId }),
-        ...(Object.keys(rest).length > 0 && { d: rest }),
-    }
-    const json = JSON.stringify(serialized)
-    // Use base64url encoding (URL-safe)
-    if (typeof btoa === 'function') {
-        return btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
-    }
-    // Node.js environment
-    return Buffer.from(json).toString('base64url')
-}
-
-/**
- * Deserialize an originator from a base64 string
- */
-export function deserializeOriginator(encoded: string): Originator | null {
-    try {
-        // Restore base64 padding if needed
-        let base64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
-        while (base64.length % 4) {
-            base64 += '='
-        }
-
-        let json: string
-        if (typeof atob === 'function') {
-            json = atob(base64)
-        } else {
-            // Node.js environment
-            json = Buffer.from(encoded, 'base64url').toString('utf-8')
-        }
-
-        const serialized: SerializedOriginator = JSON.parse(json)
-
-        if (serialized.v !== 1) {
-            return null
-        }
-
-        return {
-            originatorId: serialized.id,
-            type: serialized.t,
-            timestamp: serialized.ts,
-            ...(serialized.pid && { parentId: serialized.pid }),
-            ...(serialized.d || {}),
-        }
-    } catch {
-        return null
-    }
-}
-
-/**
- * Create headers object with originator for outgoing requests
- * @deprecated Use createTracingHeaders instead for proper trace propagation
- */
-export function createOriginatorHeaders(originator: Originator): Record<string, string> {
-    return {
-        [ORIGINATOR_HEADER]: serializeOriginator(originator),
-    }
-}
 
 /**
  * Tracing context to propagate across services
@@ -249,26 +168,6 @@ export function extractTracingContext(headers: Record<string, string | string[] 
         traceId: traceIdValue,
         originatorId: originatorIdValue,
     }
-}
-
-/**
- * Extract originator from incoming request headers
- * Returns null if no originator header is present or if parsing fails
- */
-export function extractOriginatorFromHeaders(headers: Record<string, string | string[] | undefined>): Originator | null {
-    // Case-insensitive header lookup
-    const headerKey = Object.keys(headers).find(
-        key => key.toLowerCase() === ORIGINATOR_HEADER.toLowerCase()
-    )
-    if (!headerKey) {
-        return null
-    }
-    const headerValue = headers[headerKey]
-    if (!headerValue) {
-        return null
-    }
-    const value = Array.isArray(headerValue) ? headerValue[0] : headerValue
-    return deserializeOriginator(value)
 }
 
 /**
@@ -663,6 +562,361 @@ export class FileCollector implements LogCollectorClient {
 export interface WideEventOptions {
     /** Trace ID to use (for continuing an existing trace). If not provided, a new one is generated. */
     traceId?: string;
+}
+
+/**
+ * Zod-based DSL for defining wide event partials
+ * Restricted to only allow specific primitive types for cross-language compatibility
+ */
+
+import { z, type ZodTypeAny, type ZodObject, type ZodRawShape } from 'zod'
+
+// Re-export z for schema definitions
+export { z }
+
+// Allowed primitive Zod types for partials
+type AllowedZodPrimitive =
+    | z.ZodString
+    | z.ZodNumber
+    | z.ZodBoolean
+
+// Allowed types: primitives, arrays of primitives, or optional versions
+type AllowedZodType =
+    | AllowedZodPrimitive
+    | z.ZodArray<AllowedZodPrimitive>
+    | z.ZodOptional<AllowedZodPrimitive>
+    | z.ZodOptional<z.ZodArray<AllowedZodPrimitive>>
+
+// Constraint type to ensure schema only uses allowed types
+type AllowedShape = {
+    [key: string]: AllowedZodType
+}
+
+// Partial definition with Zod schema
+export interface PartialDefinition<T extends string, S extends ZodRawShape> {
+    name: T
+    schema: ZodObject<S>
+}
+
+// Registry of all partials
+export interface Registry<T extends PartialDefinition<string, ZodRawShape>[]> {
+    partials: T
+}
+
+/**
+ * Define a partial with a name and Zod schema
+ * Only allows: z.string(), z.number(), z.boolean(), and their arrays/optionals
+ */
+export function partial<T extends string, S extends AllowedShape>(
+    name: T,
+    schema: S
+): PartialDefinition<T, S> {
+    return { name, schema: z.object(schema) }
+}
+
+/**
+ * Create a registry of partials
+ */
+export function registry<T extends PartialDefinition<string, ZodRawShape>[]>(
+    partials: T
+): Registry<T> {
+    return { partials }
+}
+
+/**
+ * Infer the TypeScript type from a partial definition
+ */
+export type InferPartial<T extends PartialDefinition<string, ZodRawShape>> =
+    z.infer<T['schema']> & { type: T['name'] }
+
+// Helper to detect Zod type info
+interface ZodFieldInfo {
+    baseType: 'string' | 'number' | 'boolean'
+    isArray: boolean
+    isOptional: boolean
+}
+
+function getZodFieldInfo(zodType: ZodTypeAny): ZodFieldInfo {
+    let current = zodType
+    let isOptional = false
+    let isArray = false
+
+    // Zod v4 uses _def.type instead of _def.typeName
+    const getDefType = (t: ZodTypeAny): string => t._def.type || t._def.typeName
+
+    // Unwrap optional
+    if (getDefType(current) === 'optional') {
+        isOptional = true
+        current = current._def.innerType
+    }
+
+    // Unwrap array
+    if (getDefType(current) === 'array') {
+        isArray = true
+        current = current._def.element
+    }
+
+    // Get base type
+    let baseType: 'string' | 'number' | 'boolean'
+    const defType = getDefType(current)
+    switch (defType) {
+        case 'string':
+            baseType = 'string'
+            break
+        case 'number':
+            baseType = 'number'
+            break
+        case 'boolean':
+            baseType = 'boolean'
+            break
+        default:
+            throw new Error(`Unsupported Zod type: ${defType}`)
+    }
+
+    return { baseType, isArray, isOptional }
+}
+
+/**
+ * Get the shape entries from a Zod schema, filtering out internal properties
+ */
+function getSchemaEntries(schema: ZodObject<ZodRawShape>): [string, ZodTypeAny][] {
+    const shape = schema.shape
+    return Object.entries(shape).filter(([key, value]) => {
+        // Filter out non-Zod entries and internal properties
+        return value && typeof value === 'object' && '_def' in value
+    }) as [string, ZodTypeAny][]
+}
+
+/**
+ * Convert a partial schema to JSON Schema
+ */
+function partialToJsonSchema(def: PartialDefinition<string, ZodRawShape>): object {
+    const properties: Record<string, object> = {
+        type: { const: def.name },
+    }
+    const required: string[] = ["type"]
+
+    for (const [fieldName, zodType] of getSchemaEntries(def.schema)) {
+        const { baseType, isArray, isOptional } = getZodFieldInfo(zodType)
+
+        const jsonType = baseType === 'number' ? 'number' : baseType
+
+        if (isArray) {
+            properties[fieldName] = {
+                type: "array",
+                items: { type: jsonType },
+            }
+        } else {
+            properties[fieldName] = { type: jsonType }
+        }
+
+        if (!isOptional) {
+            required.push(fieldName)
+        }
+    }
+
+    return {
+        type: "object",
+        properties,
+        required,
+        additionalProperties: false,
+    }
+}
+
+/**
+ * Generate full JSON Schema for a registry
+ */
+export function generateJsonSchema(reg: Registry<PartialDefinition<string, ZodRawShape>[]>): object {
+    const definitions: Record<string, object> = {}
+
+    for (const partial of reg.partials) {
+        definitions[partial.name] = partialToJsonSchema(partial)
+    }
+
+    return {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $id: "wevt-partials",
+        definitions,
+    }
+}
+
+/**
+ * Convert string to PascalCase
+ */
+function pascalCase(str: string): string {
+    return str
+        .split(/[-_]/)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join("")
+}
+
+/**
+ * Convert camelCase to snake_case
+ */
+function toSnakeCase(str: string): string {
+    return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+}
+
+/**
+ * Generate TypeScript types for a registry
+ */
+export function generateTypeScript(reg: Registry<PartialDefinition<string, ZodRawShape>[]>): string {
+    const lines: string[] = [
+        "// Auto-generated by wevt codegen - DO NOT EDIT",
+        "// Source: schema/partials.ts",
+        "",
+        'import type { EventPartial } from "../index"',
+        "",
+    ]
+
+    for (const partial of reg.partials) {
+        const interfaceName = pascalCase(partial.name) + "Partial"
+        lines.push(`export interface ${interfaceName} extends EventPartial<"${partial.name}"> {`)
+        lines.push(`    type: "${partial.name}"`)
+
+        for (const [fieldName, zodType] of getSchemaEntries(partial.schema)) {
+            const { baseType, isArray, isOptional } = getZodFieldInfo(zodType)
+            const fullType = isArray ? `${baseType}[]` : baseType
+            const optionalMarker = isOptional ? "?" : ""
+            lines.push(`    ${fieldName}${optionalMarker}: ${fullType}`)
+        }
+
+        lines.push("}")
+        lines.push("")
+    }
+
+    // Generate the registry type
+    lines.push("// Registry type combining all partials")
+    lines.push("export type GeneratedRegistry = {")
+    for (const partial of reg.partials) {
+        const interfaceName = pascalCase(partial.name) + "Partial"
+        lines.push(`    ${partial.name}: ${interfaceName}`)
+    }
+    lines.push("}")
+    lines.push("")
+
+    // Export partial names as a union
+    const partialNames = reg.partials.map((p) => `"${p.name}"`).join(" | ")
+    lines.push(`export type PartialName = ${partialNames}`)
+    lines.push("")
+
+    return lines.join("\n")
+}
+
+/**
+ * Convert Zod type to Python type annotation
+ */
+function zodTypeToPython(zodType: ZodTypeAny): string {
+    const { baseType, isArray } = getZodFieldInfo(zodType)
+
+    let pyType: string
+    switch (baseType) {
+        case "string":
+            pyType = "str"
+            break
+        case "number":
+            pyType = "float"
+            break
+        case "boolean":
+            pyType = "bool"
+            break
+    }
+
+    return isArray ? `list[${pyType}]` : pyType
+}
+
+/**
+ * Generate Python TypedDicts for a registry
+ */
+export function generatePython(reg: Registry<PartialDefinition<string, ZodRawShape>[]>): string {
+    const lines: string[] = [
+        "# Auto-generated by wevt codegen - DO NOT EDIT",
+        "# Source: schema/partials.ts",
+        "",
+        "from typing import TypedDict, TypeVar, Union",
+        "",
+    ]
+
+    for (const partial of reg.partials) {
+        const className = pascalCase(partial.name) + "Partial"
+        const entries = getSchemaEntries(partial.schema)
+
+        const hasOptional = entries.some(([_, zodType]) =>
+            getZodFieldInfo(zodType).isOptional
+        )
+
+        if (hasOptional) {
+            const requiredFields = entries.filter(
+                ([_, zodType]) => !getZodFieldInfo(zodType).isOptional
+            )
+            const optionalFields = entries.filter(
+                ([_, zodType]) => getZodFieldInfo(zodType).isOptional
+            )
+
+            if (requiredFields.length > 0) {
+                lines.push(`class _${className}Required(TypedDict):`)
+                lines.push(`    """Required fields for ${partial.name} partial"""`)
+                lines.push(`    type: str  # Literal["${partial.name}"]`)
+                for (const [fieldName, zodType] of requiredFields) {
+                    const pyType = zodTypeToPython(zodType)
+                    lines.push(`    ${toSnakeCase(fieldName)}: ${pyType}`)
+                }
+                lines.push("")
+
+                lines.push(`class ${className}(_${className}Required, total=False):`)
+                lines.push(`    """${pascalCase(partial.name)} event partial"""`)
+                for (const [fieldName, zodType] of optionalFields) {
+                    const pyType = zodTypeToPython(zodType)
+                    lines.push(`    ${toSnakeCase(fieldName)}: ${pyType}`)
+                }
+            } else {
+                lines.push(`class ${className}(TypedDict, total=False):`)
+                lines.push(`    """${pascalCase(partial.name)} event partial"""`)
+                lines.push(`    type: str  # Literal["${partial.name}"] - required`)
+                for (const [fieldName, zodType] of optionalFields) {
+                    const pyType = zodTypeToPython(zodType)
+                    lines.push(`    ${toSnakeCase(fieldName)}: ${pyType}`)
+                }
+            }
+        } else {
+            lines.push(`class ${className}(TypedDict):`)
+            lines.push(`    """${pascalCase(partial.name)} event partial"""`)
+            lines.push(`    type: str  # Literal["${partial.name}"]`)
+            for (const [fieldName, zodType] of entries) {
+                const pyType = zodTypeToPython(zodType)
+                lines.push(`    ${toSnakeCase(fieldName)}: ${pyType}`)
+            }
+        }
+        lines.push("")
+    }
+
+    // Generate union type for all partials
+    const partialTypes = reg.partials.map((p) => pascalCase(p.name) + "Partial")
+    lines.push("# Union of all partial types")
+    lines.push(`GeneratedPartial = Union[${partialTypes.join(", ")}]`)
+    lines.push("")
+
+    // Generate registry type
+    lines.push("# Registry mapping partial names to their types")
+    lines.push("class GeneratedRegistry(TypedDict):")
+    lines.push('    """Type-safe registry of all event partials"""')
+    for (const partial of reg.partials) {
+        const className = pascalCase(partial.name) + "Partial"
+        lines.push(`    ${partial.name}: ${className}`)
+    }
+    lines.push("")
+
+    // Export list
+    lines.push("__all__ = [")
+    for (const partial of reg.partials) {
+        lines.push(`    "${pascalCase(partial.name)}Partial",`)
+    }
+    lines.push('    "GeneratedPartial",')
+    lines.push('    "GeneratedRegistry",')
+    lines.push("]")
+    lines.push("")
+
+    return lines.join("\n")
 }
 
 /**
