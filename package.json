@@ -31,11 +31,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/wevt.git"
+    "url": "https://github.com/cmsparks/wevt.git"
   },
-  "homepage": "https://github.com/YOUR_USERNAME/wevt#readme",
+  "homepage": "https://github.com/cmsparks/wevt#readme",
   "bugs": {
-    "url": "https://github.com/YOUR_USERNAME/wevt/issues"
+    "url": "https://github.com/cmsparks/wevt/issues"
   },
   "devDependencies": {
     "@types/node": "^25.0.9",
