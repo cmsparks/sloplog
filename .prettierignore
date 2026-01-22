@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+*.pyc
+__pycache__
+*.egg-info
+.pytest_cache
+package-lock.json

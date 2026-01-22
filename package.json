@@ -1,6 +1,6 @@
 {
-  "name": "wevt",
-  "version": "0.0.2",
+  "name": "sloplog",
+  "version": "0.0.3",
   "description": "A TypeScript library for constructing wide events",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,38 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./codegen": {
+      "import": "./dist/codegen.js",
+      "types": "./dist/codegen.d.ts"
+    },
+    "./partials": {
+      "import": "./dist/partials.js",
+      "types": "./dist/partials.d.ts"
+    },
+    "./collectors/stdio": {
+      "import": "./dist/collectors/stdio.js",
+      "types": "./dist/collectors/stdio.d.ts"
+    },
+    "./collectors/composite": {
+      "import": "./dist/collectors/composite.js",
+      "types": "./dist/collectors/composite.d.ts"
+    },
+    "./collectors/filtered": {
+      "import": "./dist/collectors/filtered.js",
+      "types": "./dist/collectors/filtered.d.ts"
+    },
+    "./collectors/file": {
+      "import": "./dist/collectors/file.js",
+      "types": "./dist/collectors/file.d.ts"
+    },
+    "./collectors/betterstack": {
+      "import": "./dist/collectors/betterstack.js",
+      "types": "./dist/collectors/betterstack.d.ts"
+    },
+    "./collectors/sentry": {
+      "import": "./dist/collectors/sentry.js",
+      "types": "./dist/collectors/sentry.d.ts"
     }
   },
   "files": [
@@ -18,7 +50,13 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build && npm test"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write '**/*.{ts,js,json,md}'",
+    "format:check": "prettier --check '**/*.{ts,js,json,md}'",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run format:check && npm run typecheck",
+    "prepublishOnly": "npm run check && npm run build && npm test"
   },
   "keywords": [
     "wide-events",
@@ -31,18 +69,33 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cmsparks/wevt.git"
+    "url": "https://github.com/cmsparks/sloplog.git"
   },
-  "homepage": "https://github.com/cmsparks/wevt#readme",
+  "homepage": "https://github.com/cmsparks/sloplog#readme",
   "bugs": {
-    "url": "https://github.com/cmsparks/wevt/issues"
+    "url": "https://github.com/cmsparks/sloplog/issues"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@types/node": "^25.0.9",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
+    "prettier": "^3.8.0",
+    "pyright": "^1.1.408",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.53.1",
     "vitest": "^2.1.0"
   },
   "dependencies": {
     "zod": "^4.3.5"
+  },
+  "peerDependencies": {
+    "@sentry/node": "*"
+  },
+  "peerDependenciesMeta": {
+    "@sentry/node": {
+      "optional": true
+    }
   }
 }

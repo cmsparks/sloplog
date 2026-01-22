@@ -1,109 +1,204 @@
-# wevt - A python and typescript library for constructing wide events
+# sloplog - A python and typescript library for constructing wide events
 
-When constructing wide events for my services, I've found myself constructing essentially the same library again and again. I end up constructing a mediocre semi-structured wide event library. 
+When constructing wide events for my services, I've found myself constructing essentially the same library again and again. I end up constructing a mediocre semi-structured wide event library.
 
 The core idea is taken from a wide array of prior art (see below) on wide events. We have structured logs which will eventually be queried. The structured logging part isn't particularly hard, but I've found that it's nice to have a single place where my log structure is defined.
 
-## The structure of a wevt WideEvent
-
-The core idea of this library is that we have two bits of information in our wide log.
-
-1) WideEventBase: contains the service, eventId (unique per wide event), originator (thing that triggered the wide event, contains the spanId)
-2) Any number of `WideEventPartial`s: structured bits of data which are added to our wide event. You can add partials to add application logic, performance logic, etc. This can be things like user information, session ids, function performance info.
-
-We are opinionated in that we define the types of WideEventPartials and other bits of data upfront. Querying structured logs is useful only if:
-
-1) you know which fields exist
-2) fields are consistently defined (no simultaneous "user-id", "user.id", and "userId" fields)
-
-Yes, most observability interfaces attempt to discover the schemas for you, but I've found that it's not perfect.
-
-Here is an example wide event:
+## Quick start (TypeScript)
 
 ```ts
-const evt: WideEventLog<Registry> = {
-    // WideEventBase attributes
-    service: {
-        // base info
-        name: "my-rest-service",
-        version: "1.0.0"
+import { partial, registry, z, service, wideEvent, httpOriginator } from 'sloplog';
+import { stdioCollector } from 'sloplog/collectors/stdio';
 
-        // additional user defined service info
-        pod_id: "v8a4ad"
-    },
-    eventId: "evnt_V1StGXR8_Z5jdHi6B-myT",
-    originator: {
-        // ALWAYS contained on an originator
-        type: "http",
-        spanId: "span_V1StGXR8_Z5jdHi6B-myT",
-        
-        // HTTP specific originator data
-        method: "POST";
-        path: "/foo";
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:147.0) Gecko/20100101 Firefox/147.0"
-        };
-    },
+const user = partial('user', {
+  id: z.string(),
+  tier: z.enum(['free', 'pro']),
+});
 
-    // WideEventPartial: user
-    user: {
-        id: "user_V1StGXR8_Z5jdHi6B-myT",
-        tier: "pro",
-    }
+const request = partial('request', {
+  method: z.string(),
+  durationMs: z.number(),
+});
 
-    // WideEventPartial: chat
-    chat: {
-        chatId: "chat_V1StGXR8_Z5jdHi6B-myT",
-        model: "opus",
-        messages: 232,
-        tokens: 45822,
-    },
+const reg = registry([user, request]);
 
-    // WideEventPartial: chat
-    sandbox: {
-        sandboxId: "sbox_V1StGXR8_Z5jdHi6B-myT",
-        startedAt: 1768868366748,
-        startDuration: 5021,
-        liveDuration: 116748,
-    }
-}
+const collector = stdioCollector();
+const originator = httpOriginator(new Request('https://example.com'));
+
+const evt = wideEvent(reg, service({ name: 'my-service' }), originator, collector);
+
+evt.partial(user({ id: 'user_123', tier: 'pro' }));
+evt.log(request({ method: 'GET', durationMs: 120 }));
+evt.log('cache miss', { key: 'user_123' }, 'warn');
+evt.error(new Error('boom'));
+await evt.flush();
+```
+
+## Quick start (Python)
+
+```py
+import asyncio
+from sloplog import service, wideevent, cron_originator
+from sloplog.collectors import stdio_collector
+
+async def main() -> None:
+    collector = stdio_collector()
+    originator = cron_originator("*/5 * * * *", "cleanup-job")
+    evt = wideevent(service({"name": "my-service"}), originator, collector)
+
+    evt.log("cache miss", {"key": "user_123"}, "warn")
+    evt.error(Exception("boom"))
+    evt.span("refresh-cache", lambda: None)
+    await evt.flush()
+
+asyncio.run(main())
+```
+
+## The structure of a sloplog WideEvent
+
+Each wide event includes:
+
+1. WideEventBase: `eventId`, `traceId`, `service`, and `originator`
+2. WideEventPartials: structured payloads keyed by partial type
+
+Partials are defined up front to keep fields consistent across services. A wide event log
+will look like:
+
+```ts
+const evt = {
+  eventId: 'evt_...',
+  traceId: 'trace_...',
+  service: {
+    name: 'my-rest-service',
+    version: '1.0.0',
+    sloplogVersion: '0.0.3',
+    sloplogLanguage: 'typescript',
+    pod_id: 'v8a4ad',
+  },
+  originator: {
+    type: 'http',
+    originatorId: 'orig_...',
+    method: 'POST',
+    path: '/foo',
+  },
+  user: { type: 'user', id: 'user_123', tier: 'pro' },
+  request: { type: 'request', method: 'POST', durationMs: 120 },
+};
 ```
 
 ## Collectors
 
-Collectors flush wide event logs. The goal is that you can adapt the format and flush the logs wherever you want. We provide a few simple collectors, such as a StdioCollector or a FileCollector. It's generally trivial to implement a collector of your own. Just extend the collector interface and implement a flush function. When implementing your own collector, you most likely will want to implement tail sampling and event buffering here.
+Collectors flush wide event logs. The goal is that you can adapt the format and flush the logs wherever you want. Import collectors via subpaths, e.g.:
 
 ```ts
 /**
  * Simple collector to log the event in the console
  */
-class StdioCollector implements LogCollectorClient {
-    async flush(eventBase: WideEventBase, partials: Map<string, EventPartial<string>>): Promise<void> {
-        console.log({
-            ...eventBase,
-            ...partials
-        })
-    }
-}
+import { stdioCollector } from 'sloplog/collectors/stdio';
+
+const collector = stdioCollector();
 ```
+
+Python:
+
+```py
+from sloplog.collectors import stdio_collector
+
+collector = stdio_collector()
+```
+
+Included collectors: `stdio`, `file`, `composite`, `filtered`, `betterstack`, `sentry` (requires optional `@sentry/node` peer dependency).
 
 ### WideEventBase
 
-The WideEventBase type contains 3 fields:
+The WideEventBase type contains:
 
-1) `eventId`, which uniquely identifies your event
-2) `originator` which is defined broadly as an external thing that triggered your service to do some action. These can include external HTTP requests, websocket messages, cron triggers, etc. Originators have an id and can cross service boundaries. You can think of this as the thing that connects your metrics across service boundaries, much like a traceId. The difference is that originators attach additional information, like HTTP request information
-3) `service` is where an event is emitted from. Each service should emit one wide event per originator as defined above. A service has a unique name, and can be provided with additional user defined metadata
+1. `eventId`, which uniquely identifies your event
+2. `traceId`, which stays constant across a distributed trace
+3. `originator`, an external thing that triggered your service (HTTP request, cron trigger, etc)
+4. `service`, where an event is emitted from (use `service()` to add sloplog defaults)
+
+`httpOriginator()` returns `{ originator, traceId }`. You can pass that object directly to `wideEvent()` and the trace ID will be picked up automatically. In Python, `starlette_http_originator()` and `flask_http_originator()` return `{ originator, trace_id }` and can be passed directly to `wideevent()`.
 
 ### WideEventPartial
 
-These are partial bits that can be added to a WideEvent via the wevt.log() or wevt.partial() function. These are predefined in the registry type for the reasons mentioned above.
+Partials are added to a WideEvent via:
+
+- `event.partial(partial)` for structured partials
+- `event.log(partial)` as an alias for `partial()`
+- `event.log("message", data?, level?)` to emit `log_message` (level defaults to `info`, data is JSON-stringified)
+- `event.error(error)` to emit an `error` partial
+- `event.span(name, fn)` / `event.spanStart(name)` / `event.spanEnd(name)`
+
+Partials are always preferred over `log_message` for structured data. Usage errors (partial overwrites or span misuse) are emitted as `sloplog_usage_error` on flush.
+
+## Built-in partials (separate module)
+
+sloplog ships a small set of built-in partials for convenience. These are intentionally separate from the core API and may change.
+
+TypeScript:
+
+```ts
+import { builtInRegistry, builtInPartialMetadata } from 'sloplog/partials';
+```
+
+Python:
+
+```py
+from sloplog.partials import GeneratedRegistry, PARTIAL_METADATA
+```
+
+Built-in partial names: `error` (repeatable + always-sample), `log_message` (with `level`), `span`, `sloplog_usage_error`.
+
+## Registry + codegen
+
+Define your registry in a `sloplog.reg.ts` file (or any path you prefer):
+
+```ts
+import { partial, registry, z } from 'sloplog';
+
+const user = partial('user', {
+  userId: z.string(),
+  subscriptionLevel: z.string(),
+});
+
+export default registry([user]);
+```
+
+Pass the registry as the first argument to `wideEvent()` to infer types and extract metadata:
+
+```ts
+const evt = wideEvent(registry, service({ name: 'my-service' }), originator, collector);
+```
+
+Generate Python + JSON Schema outputs with the `config()` helper:
+
+```ts
+import { config } from 'sloplog/codegen';
+
+await config({
+  registry: './sloplog.reg.ts',
+  outDir: './generated',
+  outputs: ['python', 'jsonschema'],
+});
+```
+
+`registry` can be a registry object or a path to a module exporting one. Defaults write `./generated/sloplog.py` and `./generated/sloplog.json`. Disable or rename outputs via:
+
+```ts
+await config({
+  registry: './sloplog.reg.ts',
+  outputs: { python: 'types.py', jsonschema: false },
+});
+```
+
+If your registry is a TypeScript file, run the script with a TS runtime like `tsx` or `ts-node`.
 
 # prior art
 
-* an open source example of my proto-logging library: https://github.com/cloudflare/mcp-server-cloudflare/tree/eb24e3bba8be7b682aa721d34918ff0954f1254a/packages/mcp-observability 
-* https://boristane.com/blog/observability-wide-events-101/
-* https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics
-* https://jeremymorrell.dev/blog/a-practitioners-guide-to-wide-events/
-* https://charity.wtf/2024/08/07/is-it-time-to-version-observability-signs-point-to-yes/
-* https://loggingsucks.com/
+- an open source example of my proto-logging library: https://github.com/cloudflare/mcp-server-cloudflare/tree/eb24e3bba8be7b682aa721d34918ff0954f1254a/packages/mcp-observability
+- https://boristane.com/blog/observability-wide-events-101/
+- https://isburmistrov.substack.com/p/all-you-need-is-wide-events-not-metrics
+- https://jeremymorrell.dev/blog/a-practitioners-guide-to-wide-events/
+- https://charity.wtf/2024/08/07/is-it-time-to-version-observability-signs-point-to-yes/
+- https://loggingsucks.com/

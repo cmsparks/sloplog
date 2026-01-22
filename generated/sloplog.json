@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sloplog-partials",
+  "definitions": {
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        },
+        "stack": {
+          "type": "string"
+        },
+        "code": {
+          "type": "number"
+        }
+      },
+      "required": ["type", "message"],
+      "additionalProperties": false,
+      "description": "Error details captured during event processing."
+    },
+    "log_message": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "log_message"
+        },
+        "message": {
+          "type": "string"
+        },
+        "level": {
+          "type": "string",
+          "enum": ["trace", "debug", "info", "warn", "error", "fatal"]
+        },
+        "data": {
+          "type": "string"
+        }
+      },
+      "required": ["type", "message", "level"],
+      "additionalProperties": false,
+      "description": "Lightweight log entry for ad-hoc logging. Prefer structured partials when possible."
+    },
+    "span": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "span"
+        },
+        "name": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "number"
+        },
+        "endedAt": {
+          "type": "number"
+        },
+        "durationMs": {
+          "type": "number"
+        }
+      },
+      "required": ["type", "name", "startedAt", "endedAt", "durationMs"],
+      "additionalProperties": false,
+      "description": "Timing span emitted by WideEvent span helpers."
+    },
+    "sloplog_usage_error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "sloplog_usage_error"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "partialType": {
+          "type": "string"
+        },
+        "spanName": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "number"
+        },
+        "count": {
+          "type": "number"
+        }
+      },
+      "required": ["type", "kind", "message"],
+      "additionalProperties": false,
+      "description": "Internal usage errors emitted by sloplog (e.g. partial overwrites or span misuse)."
+    }
+  },
+  "metadata": {
+    "error": {
+      "repeatable": true,
+      "alwaysSample": true
+    },
+    "log_message": {
+      "repeatable": true,
+      "alwaysSample": false
+    },
+    "span": {
+      "repeatable": true,
+      "alwaysSample": false
+    },
+    "sloplog_usage_error": {
+      "repeatable": true,
+      "alwaysSample": false
+    }
+  },
+  "registry": {
+    "type": "object",
+    "description": "Structure of partial fields in a wide event log",
+    "properties": {
+      "error": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/error"
+        }
+      },
+      "log_message": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/log_message"
+        }
+      },
+      "span": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/span"
+        }
+      },
+      "sloplog_usage_error": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/sloplog_usage_error"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

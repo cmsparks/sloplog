@@ -42,8 +42,8 @@ run = "npm run test:watch"
 description = "Clean build artifacts"
 run = """
 rm -rf dist
-rm -rf python/wevt/__pycache__
-rm -rf python/tests/__pycache__
+rm -rf python/sloplog/__pycache__
+rm -rf test/python/__pycache__
 rm -rf *.egg-info
 """
 
@@ -71,6 +71,42 @@ description = "Check Python package before publishing"
 depends = ["build:py"]
 run = "twine check dist/*"
 
-[tasks.codegen]
-description = "Generate types from schema definitions"
-run = "npx tsx codegen/cli.ts schema/partials.ts"
+[tasks.lint]
+description = "Run all linters"
+depends = ["lint:js", "lint:py"]
+
+[tasks."lint:js"]
+description = "Lint TypeScript/JavaScript files with ESLint"
+run = "npx eslint ."
+
+[tasks."lint:py"]
+description = "Type check Python files with Pyright"
+run = "npx pyright"
+
+[tasks."lint:fix"]
+description = "Fix auto-fixable linting issues"
+run = "npx eslint . --fix"
+
+[tasks.format]
+description = "Format all files"
+depends = ["format:js", "format:py"]
+
+[tasks."format:js"]
+description = "Format TypeScript/JavaScript files with Prettier"
+run = "npx prettier --write '**/*.{ts,js,json,md}'"
+
+[tasks."format:py"]
+description = "Format Python files with Ruff (if available)"
+run = "ruff format python || echo 'Ruff not installed, skipping Python formatting'"
+
+[tasks."format:check"]
+description = "Check formatting without making changes"
+depends = ["format:check:js"]
+
+[tasks."format:check:js"]
+description = "Check TypeScript/JavaScript formatting"
+run = "npx prettier --check '**/*.{ts,js,json,md}'"
+
+[tasks.check]
+description = "Run all checks (lint + format check)"
+depends = ["lint", "format:check"]

@@ -2,25 +2,28 @@ import pytest
 import tempfile
 import os
 import time
-from wevt import (
-    WideEvent,
-    StdioCollector,
-    CompositeCollector,
-    FilteredCollector,
-    FileCollector,
-    LogCollectorClient,
+from sloplog import (
+    wideevent,
     WideEventBase,
     EventPartial,
     Service,
     HttpOriginator,
     Originator,
-    create_child_originator,
-    create_cron_originator,
-    create_tracing_headers,
+    cron_originator,
+    tracing_headers,
     extract_tracing_context,
     ORIGINATOR_HEADER,
     TRACE_ID_HEADER,
     TracingContext,
+    _redact_headers,
+    _redact_query_string,
+)
+from sloplog.collectors import (
+    stdio_collector,
+    composite_collector,
+    filtered_collector,
+    file_collector,
+    LogCollectorClient,
 )
 
 
@@ -30,7 +33,7 @@ def _now_ms() -> int:
 
 class TestWideEvent:
     def test_should_create_wide_event_with_event_id(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service"}
         originator: HttpOriginator = {
             "type": "http",
@@ -41,13 +44,13 @@ class TestWideEvent:
             "headers": {},
         }
 
-        evt = WideEvent(service, originator, collector)
+        evt = wideevent(service, originator, collector)
 
         assert evt.event_id.startswith("evt_")
         assert len(evt.event_id) > 4
 
     def test_should_log_partials_and_retrieve_via_to_log(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service", "version": "1.0.0"}
         originator: HttpOriginator = {
             "type": "http",
@@ -58,7 +61,7 @@ class TestWideEvent:
             "headers": {"Content-Type": "application/json"},
         }
 
-        evt = WideEvent(service, originator, collector)
+        evt = wideevent(service, originator, collector)
 
         evt.log({"type": "user", "id": "123", "name": "John"})
         evt.log({"type": "request", "method": "POST", "duration": 150})
@@ -74,7 +77,7 @@ class TestWideEvent:
 
     @pytest.mark.asyncio
     async def test_should_flush_event_to_collector(self):
-        flushed_events: list[dict] = []
+        flushed_events: list[dict[str, object]] = []
 
         class TestCollector(LogCollectorClient):
             async def flush(
@@ -92,22 +95,24 @@ class TestWideEvent:
             "path": "/test",
         }
 
-        evt = WideEvent(service, originator, test_collector)
+        evt = wideevent(service, originator, test_collector)
         evt.log({"type": "user", "id": "user_1", "name": "Test User"})
 
         await evt.flush()
 
         assert len(flushed_events) == 1
-        assert flushed_events[0]["base"].service["name"] == "test-service"
-        assert flushed_events[0]["base"].originator["originator_id"] == "orig_123"
-        assert flushed_events[0]["partials"]["user"] == {
+        base_event = flushed_events[0]["base"]
+        assert base_event.service["name"] == "test-service"  # type: ignore[union-attr]
+        assert base_event.originator["originator_id"] == "orig_123"  # type: ignore[union-attr]
+        partials_dict = flushed_events[0]["partials"]
+        assert partials_dict["user"] == {  # type: ignore[index]
             "type": "user",
             "id": "user_1",
             "name": "Test User",
         }
 
     def test_should_allow_overwriting_partials_of_same_type(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service"}
         originator: HttpOriginator = {
             "type": "http",
@@ -117,7 +122,7 @@ class TestWideEvent:
             "path": "/",
         }
 
-        evt = WideEvent(service, originator, collector)
+        evt = wideevent(service, originator, collector)
 
         evt.log({"type": "user", "id": "123", "name": "John"})
         evt.log({"type": "user", "id": "456", "name": "Jane"})
@@ -127,7 +132,7 @@ class TestWideEvent:
         assert log["user"] == {"type": "user", "id": "456", "name": "Jane"}
 
     def test_partial_and_log_methods_should_work_the_same(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service"}
         originator: HttpOriginator = {
             "type": "http",
@@ -137,8 +142,8 @@ class TestWideEvent:
             "path": "/",
         }
 
-        evt1 = WideEvent(service, originator, collector)
-        evt2 = WideEvent(service, originator, collector)
+        evt1 = wideevent(service, originator, collector)
+        evt2 = wideevent(service, originator, collector)
 
         evt1.log({"type": "user", "id": "123", "name": "John"})
         evt2.partial({"type": "user", "id": "123", "name": "John"})
@@ -148,7 +153,7 @@ class TestWideEvent:
 
 class TestStdioCollector:
     def test_should_implement_log_collector_client_interface(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
 
         assert hasattr(collector, "flush")
         assert callable(collector.flush)
@@ -172,7 +177,7 @@ class TestCompositeCollector:
             ) -> None:
                 flushed2.append(event)
 
-        composite = CompositeCollector([Collector1(), Collector2()])
+        composite = composite_collector([Collector1(), Collector2()])
 
         service: Service = {"name": "test-service"}
         originator: HttpOriginator = {
@@ -183,7 +188,7 @@ class TestCompositeCollector:
             "path": "/test",
         }
 
-        evt = WideEvent(service, originator, composite)
+        evt = wideevent(service, originator, composite)
         await evt.flush()
 
         assert len(flushed1) == 1
@@ -203,9 +208,9 @@ class TestFilteredCollector:
                 flushed_events.append(event)
 
         # Only allow events from "allowed-service"
-        filtered = FilteredCollector(
+        filtered = filtered_collector(
             InnerCollector(),
-            lambda event, _partials: event.service["name"] == "allowed-service",
+            lambda event, _partials: event.service.get("name") == "allowed-service",
         )
 
         originator: HttpOriginator = {
@@ -217,15 +222,15 @@ class TestFilteredCollector:
         }
 
         # This should be filtered out
-        evt1 = WideEvent({"name": "blocked-service"}, originator, filtered)
+        evt1 = wideevent({"name": "blocked-service"}, originator, filtered)
         await evt1.flush()
 
         # This should pass through
-        evt2 = WideEvent({"name": "allowed-service"}, originator, filtered)
+        evt2 = wideevent({"name": "allowed-service"}, originator, filtered)
         await evt2.flush()
 
         assert len(flushed_events) == 1
-        assert flushed_events[0].service["name"] == "allowed-service"
+        assert flushed_events[0].service.get("name") == "allowed-service"
 
     @pytest.mark.asyncio
     async def test_should_have_access_to_partials_in_filter_function(self):
@@ -238,7 +243,7 @@ class TestFilteredCollector:
                 flushed_events.append(event)
 
         # Only allow events with "error" partial
-        filtered = FilteredCollector(
+        filtered = filtered_collector(
             InnerCollector(),
             lambda _event, partials: "error" in partials,
         )
@@ -253,7 +258,7 @@ class TestFilteredCollector:
         }
 
         # This should be filtered out (no error partial)
-        evt1 = WideEvent(service, originator, filtered)
+        evt1 = wideevent(service, originator, filtered)
         evt1.log({"type": "user", "id": "123", "name": "John"})
         await evt1.flush()
 
@@ -267,7 +272,7 @@ class TestFileCollector:
             temp_path = f.name
 
         try:
-            file_collector = FileCollector(temp_path, buffer_size=2)
+            collector = file_collector(temp_path, buffer_size=2)
 
             service: Service = {"name": "test-service"}
             originator: HttpOriginator = {
@@ -278,7 +283,7 @@ class TestFileCollector:
                 "path": "/test",
             }
 
-            evt1 = WideEvent(service, originator, file_collector)
+            evt1 = wideevent(service, originator, collector)
             await evt1.flush()
 
             # Buffer not full yet, nothing written
@@ -286,7 +291,7 @@ class TestFileCollector:
                 content = f.read()
             assert content == ""
 
-            evt2 = WideEvent(service, originator, file_collector)
+            evt2 = wideevent(service, originator, collector)
             await evt2.flush()
 
             # Buffer full, should have flushed
@@ -304,7 +309,7 @@ class TestFileCollector:
             temp_path = f.name
 
         try:
-            file_collector = FileCollector(temp_path, buffer_size=10)
+            collector = file_collector(temp_path, buffer_size=10)
 
             service: Service = {"name": "test-service"}
             originator: HttpOriginator = {
@@ -315,7 +320,7 @@ class TestFileCollector:
                 "path": "/test",
             }
 
-            evt = WideEvent(service, originator, file_collector)
+            evt = wideevent(service, originator, collector)
             await evt.flush()
 
             # Buffer not full yet
@@ -324,7 +329,7 @@ class TestFileCollector:
             assert content == ""
 
             # Force flush
-            await file_collector.close()
+            await collector.close()
 
             with open(temp_path) as f:
                 content = f.read()
@@ -333,38 +338,27 @@ class TestFileCollector:
             os.unlink(temp_path)
 
 
-class TestOriginatorFactoryFunctions:
-    def test_should_create_a_child_originator(self):
-        parent: Originator = {
-            "originator_id": "orig_parent",
-            "type": "http",
-            "timestamp": 1234567890000,
-        }
-
-        child = create_child_originator(parent)
-
-        assert child["originator_id"].startswith("orig_")
-        assert child["originator_id"] != parent["originator_id"]
-        assert child["parent_id"] == parent["originator_id"]
-        assert child["type"] == "http"
-        assert child["timestamp"] > 0
-
+class TestOriginatorFunctions:
     def test_should_create_a_cron_originator(self):
-        cron = create_cron_originator("*/5 * * * *", "cleanup-job")
+        cron = cron_originator("*/5 * * * *", "cleanup-job")
 
         assert cron["originator_id"].startswith("orig_")
         assert cron["type"] == "cron"
-        assert cron["cron"] == "*/5 * * * *"
+        assert cron.get("cron") == "*/5 * * * *"
         assert cron.get("job_name") == "cleanup-job"
         assert cron["timestamp"] > 0
+
+    def test_should_create_a_cron_originator_with_parent_id(self):
+        cron = cron_originator("*/5 * * * *", "cleanup-job", parent_id="orig_parent123")
+
+        assert cron["originator_id"].startswith("orig_")
+        assert cron.get("parent_id") == "orig_parent123"
 
 
 class TestSensitiveDataRedaction:
     """Tests for sensitive data redaction in HTTP originators"""
 
     def test_should_redact_authorization_header(self):
-        from wevt import _redact_headers
-
         headers = {
             "authorization": "Bearer secret-token-12345",
             "content-type": "application/json",
@@ -376,8 +370,6 @@ class TestSensitiveDataRedaction:
         assert redacted["content-type"] == "application/json"
 
     def test_should_redact_sensitive_query_parameters(self):
-        from wevt import _redact_query_string
-
         query = "code=auth-code-123&state=abc&token=secret-token"
 
         redacted = _redact_query_string(query)
@@ -388,8 +380,6 @@ class TestSensitiveDataRedaction:
         assert "state=abc" in redacted
 
     def test_should_redact_multiple_sensitive_headers(self):
-        from wevt import _redact_headers
-
         headers = {
             "authorization": "Bearer token",
             "x-api-key": "api-key-secret",
@@ -405,8 +395,6 @@ class TestSensitiveDataRedaction:
         assert redacted["content-type"] == "application/json"
 
     def test_should_redact_access_token_and_refresh_token(self):
-        from wevt import _redact_query_string
-
         query = "access_token=secret1&refresh_token=secret2&client_id=public"
 
         redacted = _redact_query_string(query)
@@ -417,15 +405,11 @@ class TestSensitiveDataRedaction:
         assert "client_id=public" in redacted
 
     def test_should_handle_empty_query(self):
-        from wevt import _redact_query_string
-
         assert _redact_query_string(None) is None
         # Empty string returns falsy value (empty string)
         assert not _redact_query_string("")
 
     def test_should_preserve_non_sensitive_headers(self):
-        from wevt import _redact_headers
-
         headers = {
             "content-type": "application/json",
             "accept": "application/json",
@@ -447,13 +431,13 @@ class TestTracingContext:
             "originator_id": "orig_myoriginator456",
         }
 
-        headers = create_tracing_headers(context)
+        headers = tracing_headers(context)
 
         assert headers[TRACE_ID_HEADER] == "trace_myservice123"
         assert headers[ORIGINATOR_HEADER] == "orig_myoriginator456"
 
     def test_should_extract_tracing_context_from_headers(self):
-        headers = {
+        headers: dict[str, str | list[str] | None] = {
             TRACE_ID_HEADER: "trace_test123",
             ORIGINATOR_HEADER: "orig_test456",
         }
@@ -473,9 +457,9 @@ class TestTracingContext:
         assert extract_tracing_context({}) is None
 
     def test_should_handle_case_insensitive_header_lookup(self):
-        headers = {
-            "X-Wevt-Trace-Id": "trace_test123",
-            "X-Wevt-Originator": "orig_test456",
+        headers: dict[str, str | list[str] | None] = {
+            "X-Sloplog-Trace-Id": "trace_test123",
+            "X-Sloplog-Originator": "orig_test456",
         }
 
         context = extract_tracing_context(headers)
@@ -485,7 +469,7 @@ class TestTracingContext:
         assert context["originator_id"] == "orig_test456"
 
     def test_should_include_trace_id_in_wide_event(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service"}
         originator: HttpOriginator = {
             "type": "http",
@@ -495,14 +479,14 @@ class TestTracingContext:
             "path": "/",
         }
 
-        evt = WideEvent(service, originator, collector, trace_id="trace_custom123")
+        evt = wideevent(service, originator, collector, trace_id="trace_custom123")
 
         assert evt.trace_id == "trace_custom123"
         log = evt.to_log()
         assert log["traceId"] == "trace_custom123"
 
     def test_should_generate_trace_id_if_not_provided(self):
-        collector = StdioCollector()
+        collector = stdio_collector()
         service: Service = {"name": "my-service"}
         originator: HttpOriginator = {
             "type": "http",
@@ -512,7 +496,7 @@ class TestTracingContext:
             "path": "/",
         }
 
-        evt = WideEvent(service, originator, collector)
+        evt = wideevent(service, originator, collector)
 
         assert evt.trace_id.startswith("trace_")
 
@@ -536,7 +520,7 @@ class TestTracingContext:
             "path": "/test",
         }
 
-        evt = WideEvent(service, originator, test_collector, trace_id="trace_flush123")
+        evt = wideevent(service, originator, test_collector, trace_id="trace_flush123")
         await evt.flush()
 
         assert len(flushed_events) == 1
