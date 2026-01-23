@@ -1,46 +1,55 @@
 {
   "name": "sloplog",
-  "version": "0.0.3",
+  "version": "0.0.5",
   "description": "A TypeScript library for constructing wide events",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.js"
     },
     "./codegen": {
+      "types": "./dist/codegen.d.ts",
       "import": "./dist/codegen.js",
-      "types": "./dist/codegen.d.ts"
+      "default": "./dist/codegen.js"
     },
     "./partials": {
+      "types": "./dist/partials.d.ts",
       "import": "./dist/partials.js",
-      "types": "./dist/partials.d.ts"
+      "default": "./dist/partials.js"
     },
     "./collectors/stdio": {
+      "types": "./dist/collectors/stdio.d.ts",
       "import": "./dist/collectors/stdio.js",
-      "types": "./dist/collectors/stdio.d.ts"
+      "default": "./dist/collectors/stdio.js"
     },
     "./collectors/composite": {
+      "types": "./dist/collectors/composite.d.ts",
       "import": "./dist/collectors/composite.js",
-      "types": "./dist/collectors/composite.d.ts"
+      "default": "./dist/collectors/composite.js"
     },
     "./collectors/filtered": {
+      "types": "./dist/collectors/filtered.d.ts",
       "import": "./dist/collectors/filtered.js",
-      "types": "./dist/collectors/filtered.d.ts"
+      "default": "./dist/collectors/filtered.js"
     },
     "./collectors/file": {
+      "types": "./dist/collectors/file.d.ts",
       "import": "./dist/collectors/file.js",
-      "types": "./dist/collectors/file.d.ts"
+      "default": "./dist/collectors/file.js"
     },
     "./collectors/betterstack": {
+      "types": "./dist/collectors/betterstack.d.ts",
       "import": "./dist/collectors/betterstack.js",
-      "types": "./dist/collectors/betterstack.d.ts"
+      "default": "./dist/collectors/betterstack.js"
     },
     "./collectors/sentry": {
+      "types": "./dist/collectors/sentry.d.ts",
       "import": "./dist/collectors/sentry.js",
-      "types": "./dist/collectors/sentry.d.ts"
+      "default": "./dist/collectors/sentry.js"
     }
   },
   "files": [

@@ -1,5 +1,6 @@
 import type { WideEventBase, EventPartial } from '../index.js';
 import type { LogCollectorClient, FlushOptions } from './index.js';
+import { flattenObject, withSuppressedConsole } from './index.js';
 
 /** Type alias for partial values (singular or array) */
 type PartialValue = EventPartial<string> | EventPartial<string>[];
@@ -35,22 +36,43 @@ export interface SentryCollectorOptions {
   ) => SentryLogLevel;
   /** Log message to use (default: "wide-event") */
   message?: string;
+  /**
+   * If true, flatten nested attributes to dot-notation keys for better
+   * queryability in Sentry (e.g., `error.message`, `spans.0.name`).
+   * Default: true
+   */
+  flattenAttributes?: boolean;
+  /**
+   * If true, suppress console output from Sentry SDK during logging.
+   * Useful when you're already handling console output via another collector.
+   * Default: true
+   */
+  suppressConsole?: boolean;
 }
 
 /**
- * Collector that sends events to Sentry Logs via the Sentry logger API
+ * Collector that sends events to Sentry Logs via the Sentry logger API.
+ *
+ * Note: This is a hacky implementation that doesn't fully take advantage
+ * of Sentry's features. It flattens nested objects to dot-notation keys
+ * for queryability, but Sentry's structured logging would be more powerful
+ * if used with proper Sentry integrations.
  */
 export class SentryCollector implements LogCollectorClient {
   private logger: SentryLogger;
   private defaultLevel: SentryLogLevel;
   private levelSelector?: SentryCollectorOptions['levelSelector'];
   private message: string;
+  private flattenAttributes: boolean;
+  private suppressConsole: boolean;
 
   constructor(options: SentryCollectorOptions) {
     this.logger = options.logger;
     this.defaultLevel = options.level ?? 'info';
     this.levelSelector = options.levelSelector;
     this.message = options.message ?? 'wide-event';
+    this.flattenAttributes = options.flattenAttributes ?? true;
+    this.suppressConsole = options.suppressConsole ?? true;
   }
 
   async flush(
@@ -63,29 +85,43 @@ export class SentryCollector implements LogCollectorClient {
       partialsObj[key] = value;
     }
 
-    const attributes = {
+    const combined = {
       ...event,
       ...partialsObj,
     };
+
+    // Flatten nested attributes to dot-notation for better Sentry queryability
+    const attributes = this.flattenAttributes
+      ? flattenObject(combined)
+      : (combined as Record<string, unknown>);
 
     const level = this.levelSelector
       ? this.levelSelector(event, partials, options)
       : this.defaultLevel;
 
-    const loggerMethod =
-      (level === 'trace' && this.logger.trace) ||
-      (level === 'debug' && this.logger.debug) ||
-      (level === 'info' && this.logger.info) ||
-      (level === 'warn' && this.logger.warn) ||
-      (level === 'error' && this.logger.error) ||
-      (level === 'fatal' && this.logger.fatal);
+    const logFn = () => {
+      const loggerMethod =
+        (level === 'trace' && this.logger.trace) ||
+        (level === 'debug' && this.logger.debug) ||
+        (level === 'info' && this.logger.info) ||
+        (level === 'warn' && this.logger.warn) ||
+        (level === 'error' && this.logger.error) ||
+        (level === 'fatal' && this.logger.fatal);
 
-    if (loggerMethod) {
-      loggerMethod(this.message, attributes);
-      return;
+      if (loggerMethod) {
+        loggerMethod(this.message, attributes);
+        return;
+      }
+
+      this.logger.log?.(level, this.message, attributes);
+    };
+
+    // Suppress console output from Sentry SDK if configured
+    if (this.suppressConsole) {
+      withSuppressedConsole(logFn);
+    } else {
+      logFn();
     }
-
-    this.logger.log?.(level, this.message, attributes);
   }
 }
 

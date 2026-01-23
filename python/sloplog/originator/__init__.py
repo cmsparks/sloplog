@@ -94,7 +94,7 @@ def tracing_headers(context: TracingContext) -> dict[str, str]:
 
 
 def extract_tracing_context(
-    headers: dict[str, str | list[str] | None]
+    headers: dict[str, str | list[str] | None],
 ) -> TracingContext | None:
     """
     Extract tracing context from incoming request headers.
@@ -252,7 +252,9 @@ def starlette_http_originator(
     return {
         "originator": originator,
         # Use incoming trace_id if present, otherwise generate a new one
-        "trace_id": tracing_context["trace_id"] if tracing_context else f"trace_{nano_id()}",
+        "trace_id": tracing_context["trace_id"]
+        if tracing_context
+        else f"trace_{nano_id()}",
     }
 
 
@@ -322,7 +324,9 @@ def flask_http_originator(
     return {
         "originator": originator,
         # Use incoming trace_id if present, otherwise generate a new one
-        "trace_id": tracing_context["trace_id"] if tracing_context else f"trace_{nano_id()}",
+        "trace_id": tracing_context["trace_id"]
+        if tracing_context
+        else f"trace_{nano_id()}",
     }
 
 

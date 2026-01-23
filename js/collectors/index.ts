@@ -1,6 +1,99 @@
 import type { WideEventBase, EventPartial } from '../index.js';
 
 /**
+ * Maximum number of stack trace lines to include in error logs
+ */
+const MAX_STACK_LINES = 10;
+
+/**
+ * Truncate a stack trace to MAX_STACK_LINES lines
+ */
+export function truncateStack(stack: string | undefined): string | undefined {
+  if (!stack) return stack;
+  const lines = stack.split('\n');
+  if (lines.length <= MAX_STACK_LINES) return stack;
+  return lines.slice(0, MAX_STACK_LINES).join('\n') + '\n    ... truncated';
+}
+
+/**
+ * Flatten a nested object to dot-notation keys.
+ * Arrays use numeric indices: `partialName.0.subKey`
+ * Stack traces are automatically truncated.
+ */
+export function flattenObject(
+  obj: unknown,
+  prefix = '',
+  result: Record<string, unknown> = {},
+): Record<string, unknown> {
+  if (obj === null || obj === undefined) {
+    if (prefix) {
+      result[prefix] = obj;
+    }
+    return result;
+  }
+
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      flattenObject(obj[i], prefix ? `${prefix}.${i}` : String(i), result);
+    }
+    return result;
+  }
+
+  if (typeof obj === 'object') {
+    for (const [key, value] of Object.entries(obj)) {
+      const newKey = prefix ? `${prefix}.${key}` : key;
+      // Truncate stack traces
+      if (key === 'stack' && typeof value === 'string') {
+        result[newKey] = truncateStack(value);
+      } else {
+        flattenObject(value, newKey, result);
+      }
+    }
+    return result;
+  }
+
+  if (prefix) {
+    result[prefix] = obj;
+  }
+  return result;
+}
+
+/**
+ * Execute a function with all console methods suppressed.
+ * Useful for preventing Sentry SDK from outputting its own logs to console
+ * when we're already handling console output ourselves.
+ */
+export function withSuppressedConsole<T>(fn: () => T): T {
+  /* eslint-disable no-console */
+  const noop = () => {};
+  const originalLog = console.log;
+  const originalInfo = console.info;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const originalDebug = console.debug;
+  const originalTrace = console.trace;
+
+  console.log = noop;
+  console.info = noop;
+  console.warn = noop;
+  console.error = noop;
+  console.debug = noop;
+  console.trace = noop;
+
+  try {
+    return fn();
+  } finally {
+    console.log = originalLog;
+    console.info = originalInfo;
+    console.warn = originalWarn;
+    console.error = originalError;
+    console.debug = originalDebug;
+    console.trace = originalTrace;
+  }
+  /* eslint-enable no-console */
+}
+
+/**
  * Options passed to collectors when flushing an event
  */
 export interface FlushOptions {
@@ -28,9 +121,33 @@ export interface LogCollectorClient {
 type PartialValue = EventPartial<string> | EventPartial<string>[];
 
 /**
+ * Options for StdioCollector
+ */
+export interface StdioCollectorOptions {
+  /**
+   * Prefix to prepend to each log line.
+   * Default: "[wide-event]"
+   */
+  prefix?: string;
+  /**
+   * If true, pretty-print the JSON output with 2-space indentation.
+   * Default: true
+   */
+  prettyPrint?: boolean;
+}
+
+/**
  * Simple collector to log the event to stdout/console
  */
 export class StdioCollector implements LogCollectorClient {
+  private prefix: string;
+  private prettyPrint: boolean;
+
+  constructor(options: StdioCollectorOptions = {}) {
+    this.prefix = options.prefix ?? '[wide-event]';
+    this.prettyPrint = options.prettyPrint ?? true;
+  }
+
   async flush(
     eventBase: WideEventBase,
     partials: Map<string, PartialValue>,
@@ -40,21 +157,21 @@ export class StdioCollector implements LogCollectorClient {
     for (const [key, value] of partials) {
       partialsObj[key] = value;
     }
+    const event = {
+      ...eventBase,
+      ...partialsObj,
+    };
+    const json = this.prettyPrint ? JSON.stringify(event, null, 2) : JSON.stringify(event);
     // eslint-disable-next-line no-console
-    console.log(
-      JSON.stringify({
-        ...eventBase,
-        ...partialsObj,
-      }),
-    );
+    console.log(this.prefix, json);
   }
 }
 
 /**
  * Create a collector that logs events to stdout/console.
  */
-export function stdioCollector(): StdioCollector {
-  return new StdioCollector();
+export function stdioCollector(options: StdioCollectorOptions = {}): StdioCollector {
+  return new StdioCollector(options);
 }
 
 /**

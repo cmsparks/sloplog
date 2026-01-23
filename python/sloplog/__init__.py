@@ -187,7 +187,9 @@ def composite_collector(collectors: list[LogCollectorClient]) -> "CompositeColle
 
 
 # Type alias for filter functions
-EventFilter = Callable[[WideEventBase, dict[str, PartialValue]], bool]  # Filter signature.
+EventFilter = Callable[
+    [WideEventBase, dict[str, PartialValue]], bool
+]  # Filter signature.
 
 
 class FilteredCollector(LogCollectorClient):
@@ -237,8 +239,10 @@ class BetterStackCollector(LogCollectorClient):
     async def flush(
         self, event: WideEventBase, partials: dict[str, PartialValue]
     ) -> None:
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat().replace(
-            "+00:00", "Z"
+        timestamp = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
         )
         log_entry = {
             "dt": timestamp,
@@ -290,9 +294,7 @@ class BetterStackCollector(LogCollectorClient):
         """Force flush any remaining buffered events (call on shutdown)."""
         await self.flush_buffer()
 
-    async def _default_send(
-        self, url: str, headers: dict[str, str], body: str
-    ) -> None:
+    async def _default_send(self, url: str, headers: dict[str, str], body: str) -> None:
         def _post() -> None:
             req = urllib.request.Request(
                 url,
@@ -573,8 +575,10 @@ class WideEvent(Generic[R]):
             err: Exception, message string, or error-like dict
             code: Optional numeric error code
         """
-        if isinstance(err, dict) and err.get("type") == "error" and isinstance(
-            err.get("message"), str
+        if (
+            isinstance(err, dict)
+            and err.get("type") == "error"
+            and isinstance(err.get("message"), str)
         ):
             self._add_partial_internal(err)
             return
@@ -677,7 +681,9 @@ class WideEvent(Generic[R]):
             return
 
         metadata = self._partial_metadata.get(partial_type, {})
-        repeatable = metadata.get("repeatable", self._is_repeatable_fallback(partial_type))
+        repeatable = metadata.get(
+            "repeatable", self._is_repeatable_fallback(partial_type)
+        )
 
         if repeatable:
             self._append_repeatable(partial_type, partial)
@@ -752,7 +758,9 @@ class WideEvent(Generic[R]):
 
     def _format_error_stack(self, err: Any) -> str | None:
         if isinstance(err, BaseException):
-            return "".join(traceback.format_exception(type(err), err, err.__traceback__))
+            return "".join(
+                traceback.format_exception(type(err), err, err.__traceback__)
+            )
         if isinstance(err, dict):
             stack = err.get("stack")
             if isinstance(stack, str):
