@@ -1,6 +1,10 @@
 import type { ZodRawShape } from 'zod';
 import type { LogCollectorClient } from './collectors/index.js';
 import { extractPartialMetadata } from './registry.js';
+
+// Re-export collectors from main entry point for easier bundler compatibility
+export * from './collectors/index.js';
+export * from './collectors/sentry.js';
 import type {
   PartialMetadata,
   PartialDefinition,
@@ -22,7 +26,7 @@ function nanoId(): string {
 }
 
 /** Current sloplog library version (propagated onto Service). */
-export const SLOPLOG_VERSION = '0.0.2';
+export const SLOPLOG_VERSION = '0.0.6';
 /** Default language marker when Service.sloplogLanguage is not set. */
 const SLOPLOG_LANGUAGE = 'typescript';
 
@@ -202,10 +206,9 @@ export type {
   RegistryType,
 } from './registry.js';
 
-// Re-export codegen functions
-export { generateTypeScript, generatePython, generateJsonSchema } from './codegen.js';
-export { config } from './codegen.js';
-export type { CodegenConfig, CodegenOutputs, CodegenOutputKind, CodegenResult } from './codegen.js';
+// Codegen functions are NOT re-exported from main entry point to avoid bundling
+// Node.js-specific code (pathToFileURL, node:fs) in React Native / browser environments.
+// Import from 'sloplog/codegen' directly when you need codegen functionality.
 
 /**
  * Core WideEvent class.

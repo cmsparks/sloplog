@@ -1,6 +1,6 @@
 {
   "name": "sloplog",
-  "version": "0.0.5",
+  "version": "0.0.13",
   "description": "A TypeScript library for constructing wide events",
   "type": "module",
   "main": "dist/index.js",
@@ -94,13 +94,12 @@
     "pyright": "^1.1.408",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.53.1",
-    "vitest": "^2.1.0"
-  },
-  "dependencies": {
+    "vitest": "^2.1.0",
     "zod": "^4.3.5"
   },
   "peerDependencies": {
-    "@sentry/node": "*"
+    "@sentry/node": "*",
+    "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "@sentry/node": {

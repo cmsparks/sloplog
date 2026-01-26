@@ -1,6 +1,6 @@
 import type { WideEventBase, EventPartial } from '../index.js';
 import type { LogCollectorClient, FlushOptions } from './index.js';
-import { flattenObject, withSuppressedConsole } from './index.js';
+import { flattenObject } from './index.js';
 
 /** Type alias for partial values (singular or array) */
 type PartialValue = EventPartial<string> | EventPartial<string>[];
@@ -22,10 +22,10 @@ export interface SentryLogger {
  */
 export interface SentryCollectorOptions {
   /**
-   * Sentry logger instance (e.g. Sentry.logger). Requires the Sentry logger
-   * integration to be configured during Sentry.init().
+   * Sentry logger instance (e.g. Sentry.logger).
+   * Requires the Sentry logger integration to be configured during Sentry.init().
    */
-  logger: SentryLogger;
+  logger?: SentryLogger;
   /** Default log level for events (default: "info") */
   level?: SentryLogLevel;
   /** Optional function to derive log level per event */
@@ -34,45 +34,68 @@ export interface SentryCollectorOptions {
     partials: Map<string, PartialValue>,
     options: FlushOptions,
   ) => SentryLogLevel;
-  /** Log message to use (default: "wide-event") */
-  message?: string;
   /**
    * If true, flatten nested attributes to dot-notation keys for better
    * queryability in Sentry (e.g., `error.message`, `spans.0.name`).
    * Default: true
    */
   flattenAttributes?: boolean;
-  /**
-   * If true, suppress console output from Sentry SDK during logging.
-   * Useful when you're already handling console output via another collector.
-   * Default: true
-   */
-  suppressConsole?: boolean;
+}
+
+/**
+ * Build a summary message for a wide event.
+ *
+ * Format: [WideEvent] eventId: {id} service: {serviceName} originator: {originatorType} {httpDetails}
+ */
+function buildSummaryMessage(event: WideEventBase): string {
+  const parts: string[] = ['[WideEvent]'];
+
+  // Event ID (shortened)
+  parts.push(`eventId:${event.eventId}`);
+
+  // Service name
+  if (event.service?.name) {
+    parts.push(`service:${event.service.name}`);
+  }
+
+  // Originator type and details
+  const originator = event.originator;
+  if (originator) {
+    parts.push(`originator:${originator.type}`);
+
+    // For HTTP originators, include method and path
+    if (originator.type === 'http') {
+      const method = originator.method as string | undefined;
+      const path = originator.path as string | undefined;
+      if (method && path) {
+        parts.push(`${method} ${path}`);
+      }
+    }
+  }
+
+  return parts.join(' ');
 }
 
 /**
  * Collector that sends events to Sentry Logs via the Sentry logger API.
  *
- * Note: This is a hacky implementation that doesn't fully take advantage
- * of Sentry's features. It flattens nested objects to dot-notation keys
- * for queryability, but Sentry's structured logging would be more powerful
- * if used with proper Sentry integrations.
+ * Generates a summary message with event ID, service name, and originator details.
+ * For HTTP originators, includes method and path.
+ *
+ * Attributes are flattened to dot-notation keys for better queryability
+ * in Sentry (e.g., `error.message`, `spans.0.name`).
  */
 export class SentryCollector implements LogCollectorClient {
-  private logger: SentryLogger;
+  private logger?: SentryLogger;
   private defaultLevel: SentryLogLevel;
   private levelSelector?: SentryCollectorOptions['levelSelector'];
-  private message: string;
   private flattenAttributes: boolean;
-  private suppressConsole: boolean;
 
   constructor(options: SentryCollectorOptions) {
     this.logger = options.logger;
     this.defaultLevel = options.level ?? 'info';
     this.levelSelector = options.levelSelector;
-    this.message = options.message ?? 'wide-event';
     this.flattenAttributes = options.flattenAttributes ?? true;
-    this.suppressConsole = options.suppressConsole ?? true;
   }
 
   async flush(
@@ -80,6 +103,11 @@ export class SentryCollector implements LogCollectorClient {
     partials: Map<string, PartialValue>,
     options: FlushOptions,
   ): Promise<void> {
+    const logger = this.logger;
+    if (!logger) {
+      return;
+    }
+
     const partialsObj: Record<string, PartialValue> = {};
     for (const [key, value] of partials) {
       partialsObj[key] = value;
@@ -99,29 +127,27 @@ export class SentryCollector implements LogCollectorClient {
       ? this.levelSelector(event, partials, options)
       : this.defaultLevel;
 
+    // Build summary message
+    const message = buildSummaryMessage(event);
+
     const logFn = () => {
       const loggerMethod =
-        (level === 'trace' && this.logger.trace) ||
-        (level === 'debug' && this.logger.debug) ||
-        (level === 'info' && this.logger.info) ||
-        (level === 'warn' && this.logger.warn) ||
-        (level === 'error' && this.logger.error) ||
-        (level === 'fatal' && this.logger.fatal);
+        (level === 'trace' && logger.trace) ||
+        (level === 'debug' && logger.debug) ||
+        (level === 'info' && logger.info) ||
+        (level === 'warn' && logger.warn) ||
+        (level === 'error' && logger.error) ||
+        (level === 'fatal' && logger.fatal);
 
       if (loggerMethod) {
-        loggerMethod(this.message, attributes);
+        loggerMethod(message, attributes);
         return;
       }
 
-      this.logger.log?.(level, this.message, attributes);
+      logger.log?.(level, message, attributes);
     };
 
-    // Suppress console output from Sentry SDK if configured
-    if (this.suppressConsole) {
-      withSuppressedConsole(logFn);
-    } else {
-      logFn();
-    }
+    logFn();
   }
 }
 

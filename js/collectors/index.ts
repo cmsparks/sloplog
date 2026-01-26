@@ -59,41 +59,6 @@ export function flattenObject(
 }
 
 /**
- * Execute a function with all console methods suppressed.
- * Useful for preventing Sentry SDK from outputting its own logs to console
- * when we're already handling console output ourselves.
- */
-export function withSuppressedConsole<T>(fn: () => T): T {
-  /* eslint-disable no-console */
-  const noop = () => {};
-  const originalLog = console.log;
-  const originalInfo = console.info;
-  const originalWarn = console.warn;
-  const originalError = console.error;
-  const originalDebug = console.debug;
-  const originalTrace = console.trace;
-
-  console.log = noop;
-  console.info = noop;
-  console.warn = noop;
-  console.error = noop;
-  console.debug = noop;
-  console.trace = noop;
-
-  try {
-    return fn();
-  } finally {
-    console.log = originalLog;
-    console.info = originalInfo;
-    console.warn = originalWarn;
-    console.error = originalError;
-    console.debug = originalDebug;
-    console.trace = originalTrace;
-  }
-  /* eslint-enable no-console */
-}
-
-/**
  * Options passed to collectors when flushing an event
  */
 export interface FlushOptions {

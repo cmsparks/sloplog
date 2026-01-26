@@ -2,16 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  partial,
-  registry,
-  z,
-  generateTypeScript,
-  generatePython,
-  generateJsonSchema,
-  type InferPartial,
-} from '../../js/index';
-import { config } from '../../js/codegen';
+import { partial, registry, z, type InferPartial } from '../../js/index';
+import { config, generateTypeScript, generatePython, generateJsonSchema } from '../../js/codegen';
 
 describe('Codegen DSL', () => {
   describe('partial()', () => {
