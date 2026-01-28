@@ -194,6 +194,8 @@ await config({
 
 If your registry is a TypeScript file, run the script with a TS runtime like `tsx` or `ts-node`.
 
+Hello
+
 # prior art
 
 - an open source example of my proto-logging library: https://github.com/cloudflare/mcp-server-cloudflare/tree/eb24e3bba8be7b682aa721d34918ff0954f1254a/packages/mcp-observability
