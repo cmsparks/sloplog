@@ -76,6 +76,20 @@ from .collectors import (
     stdio_collector,
 )
 
+# Import aggregation functions
+from .aggregations import (
+    AggFn,
+    HistogramResult,
+    histogram,
+    DEFAULT_HISTOGRAM_BUCKETS,
+)
+
+# Import aggregation functions with explicit names to avoid shadowing builtins
+from .aggregations import sum as agg_sum
+from .aggregations import min as agg_min
+from .aggregations import max as agg_max
+from .aggregations import count as agg_count
+
 
 # Generic type for the registry
 R = TypeVar("R", bound=dict[str, PartialValue])
@@ -102,14 +116,14 @@ class WideEvent(Generic[R]):
         originator: Originator,
         collector: LogCollectorClient,
         trace_id: str | None = None,
-        partial_metadata: dict[str, dict[str, bool]] | None = None,
+        partial_metadata: dict[str, PartialMetadata] | None = None,
     ):
         self.event_id = f"evt_{nano_id()}"
         self.trace_id = trace_id or f"trace_{nano_id()}"
         self._service = service
         self._originator = originator
         self._collector = collector
-        self._partial_metadata = partial_metadata or {}
+        self._partial_metadata: dict[str, PartialMetadata] = partial_metadata or {}
         self._partials: dict[str, PartialValue] = {}
         self._open_spans: dict[str, list[int]] = {}
         self._service = cast(Service, dict(self._service))
@@ -271,8 +285,11 @@ class WideEvent(Generic[R]):
         Emit the full wide log to the collector.
         Any usage errors (e.g. unended spans, partial overwrites) are emitted
         as sloplog_usage_error partials before flushing.
+        Automatic span rollups and opt-in partial rollups are computed before flush.
         """
         self._record_open_spans()
+        self._compute_span_rollups()
+        self._compute_partial_rollups()
         event_base = WideEventBase(
             event_id=self.event_id,
             trace_id=self.trace_id,
@@ -347,6 +364,89 @@ class WideEvent(Generic[R]):
                 )
         self._open_spans.clear()
 
+    def _compute_span_rollups(self) -> None:
+        """
+        Compute automatic span rollups.
+        Groups spans by name and computes aggregation statistics.
+        Stores result as `span.agg` partial with shape { [name]: SpanAggregation }
+        """
+        spans = self._partials.get("span")
+        if not spans or not isinstance(spans, list) or len(spans) == 0:
+            return
+
+        # Group spans by name
+        spans_by_name: dict[str, list[dict[str, Any]]] = {}
+        for span in spans:
+            name = span.get("name")
+            duration_ms = span.get("duration_ms")
+            if isinstance(name, str) and isinstance(duration_ms, (int, float)):
+                if name not in spans_by_name:
+                    spans_by_name[name] = []
+                spans_by_name[name].append({"duration_ms": duration_ms})
+
+        # Compute aggregations for each span name
+        aggregations: dict[str, Any] = {"type": "span.agg"}
+        for name, span_list in spans_by_name.items():
+            durations = [s["duration_ms"] for s in span_list]
+            count = len(durations)
+            total = sum(durations)
+            min_val = min(durations)
+            max_val = max(durations)
+
+            aggregations[name] = {
+                "count": count,
+                "duration": {"total": total, "min": min_val, "max": max_val},
+            }
+
+        # Store as span.agg partial (singular, not repeatable)
+        self._partials["span.agg"] = aggregations
+
+    def _compute_partial_rollups(self) -> None:
+        """
+        Compute opt-in rollups for repeatable partials that have agg config.
+        Stores result as `[partial_name].agg` with shape { count, [field]: { [aggName]: value } }
+        """
+        for partial_type, partials_or_partial in list(self._partials.items()):
+            # Skip non-array entries (singular partials) and span (handled separately)
+            if not isinstance(partials_or_partial, list) or partial_type == "span":
+                continue
+
+            metadata = self._partial_metadata.get(partial_type)
+            if not metadata:
+                continue
+
+            agg_config = metadata.get("agg")
+            if not agg_config:
+                continue
+
+            partial_list = partials_or_partial
+            if len(partial_list) == 0:
+                continue
+
+            # Build the aggregation result
+            agg_result: dict[str, Any] = {
+                "type": f"{partial_type}.agg",
+                "count": len(partial_list),
+            }
+
+            # Compute aggregations for each configured field
+            for field_name, agg_fns in agg_config.items():
+                values: list[Any] = []
+                for partial in partial_list:
+                    value = partial.get(field_name)
+                    if value is not None:
+                        values.append(value)
+
+                if values:
+                    field_aggs: dict[str, Any] = {}
+                    for agg_fn in agg_fns:
+                        # agg_fn is an AggFn object with name and __call__
+                        field_aggs[agg_fn.name] = agg_fn(values)
+                    agg_result[field_name] = field_aggs
+
+            # Store as [partial_name].agg partial (singular)
+            self._partials[f"{partial_type}.agg"] = agg_result
+
     def _format_error_message(self, err: Any) -> str:
         if isinstance(err, str):
             return err
@@ -385,7 +485,7 @@ def wideevent(
     originator: Originator | OriginatorFromRequestResult,
     collector: LogCollectorClient,
     trace_id: str | None = None,
-    partial_metadata: dict[str, dict[str, bool]] | None = None,
+    partial_metadata: dict[str, PartialMetadata] | None = None,
 ) -> WideEvent[dict[str, PartialValue]]:
     """
     Create a WideEvent instance. Prefer this factory over class construction.
@@ -457,4 +557,13 @@ __all__ = [
     "composite_collector",
     "filtered_collector",
     "stdio_collector",
+    # Aggregation types and functions
+    "AggFn",
+    "HistogramResult",
+    "agg_sum",
+    "agg_min",
+    "agg_max",
+    "agg_count",
+    "histogram",
+    "DEFAULT_HISTOGRAM_BUCKETS",
 ]

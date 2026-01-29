@@ -2,6 +2,7 @@ import pytest
 import tempfile
 import os
 import time
+from typing import Any
 from sloplog import (
     wideevent,
     WideEventBase,
@@ -15,8 +16,14 @@ from sloplog import (
     ORIGINATOR_HEADER,
     TRACE_ID_HEADER,
     TracingContext,
+    PartialMetadata,
     _redact_headers,
     _redact_query_string,
+    agg_sum,
+    agg_min,
+    agg_max,
+    histogram,
+    DEFAULT_HISTOGRAM_BUCKETS,
 )
 from sloplog.collectors import (
     stdio_collector,
@@ -525,3 +532,321 @@ class TestTracingContext:
 
         assert len(flushed_events) == 1
         assert flushed_events[0].trace_id == "trace_flush123"
+
+
+class TestSpanRollups:
+    """Tests for automatic span rollup computation"""
+
+    @pytest.mark.asyncio
+    async def test_should_compute_span_rollups_on_flush(self):
+        flushed_partials: dict[str, Any] = {}
+
+        class TestCollector(LogCollectorClient):
+            async def flush(
+                self, event: WideEventBase, partials: dict[str, EventPartial]
+            ) -> None:
+                flushed_partials.update(partials)
+
+        test_collector = TestCollector()
+        service: Service = {"name": "test-service"}
+        originator: HttpOriginator = {
+            "type": "http",
+            "originator_id": "orig_123",
+            "timestamp": _now_ms(),
+            "method": "GET",
+            "path": "/test",
+        }
+
+        evt = wideevent(service, originator, test_collector)
+
+        # Add multiple spans with the same name
+        evt.span_start("db-query")
+        evt.span_end("db-query")
+
+        evt.span_start("db-query")
+        evt.span_end("db-query")
+
+        evt.span_start("api-call")
+        evt.span_end("api-call")
+
+        await evt.flush()
+
+        # Check span.agg was created
+        assert "span.agg" in flushed_partials
+        span_agg = flushed_partials["span.agg"]
+
+        assert span_agg["type"] == "span.agg"
+        assert "db-query" in span_agg
+        assert span_agg["db-query"]["count"] == 2
+        assert "duration" in span_agg["db-query"]
+        assert "total" in span_agg["db-query"]["duration"]
+        assert "min" in span_agg["db-query"]["duration"]
+        assert "max" in span_agg["db-query"]["duration"]
+
+        assert "api-call" in span_agg
+        assert span_agg["api-call"]["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_should_not_create_span_agg_when_no_spans(self):
+        flushed_partials: dict[str, Any] = {}
+
+        class TestCollector(LogCollectorClient):
+            async def flush(
+                self, event: WideEventBase, partials: dict[str, EventPartial]
+            ) -> None:
+                flushed_partials.update(partials)
+
+        test_collector = TestCollector()
+        service: Service = {"name": "test-service"}
+        originator: HttpOriginator = {
+            "type": "http",
+            "originator_id": "orig_123",
+            "timestamp": _now_ms(),
+            "method": "GET",
+            "path": "/test",
+        }
+
+        evt = wideevent(service, originator, test_collector)
+        evt.log({"type": "user", "id": "123"})
+
+        await evt.flush()
+
+        assert "span.agg" not in flushed_partials
+
+
+class TestPartialRollups:
+    """Tests for opt-in partial rollup computation"""
+
+    @pytest.mark.asyncio
+    async def test_should_compute_partial_rollups_with_agg_config(self):
+        flushed_partials: dict[str, Any] = {}
+
+        class TestCollector(LogCollectorClient):
+            async def flush(
+                self, event: WideEventBase, partials: dict[str, EventPartial]
+            ) -> None:
+                flushed_partials.update(partials)
+
+        test_collector = TestCollector()
+        service: Service = {"name": "test-service"}
+        originator: HttpOriginator = {
+            "type": "http",
+            "originator_id": "orig_123",
+            "timestamp": _now_ms(),
+            "method": "GET",
+            "path": "/test",
+        }
+
+        # Define partial metadata with agg config (using AggFn objects)
+        partial_metadata: dict[str, PartialMetadata] = {
+            "db_query": {
+                "repeatable": True,
+                "always_sample": False,
+                "agg": {
+                    "duration_ms": [agg_sum, agg_min, agg_max],
+                    "row_count": [agg_sum],
+                },
+            },
+        }
+
+        evt = wideevent(
+            service, originator, test_collector, partial_metadata=partial_metadata
+        )
+
+        # Add multiple db_query partials
+        evt.partial({"type": "db_query", "table": "users", "duration_ms": 10, "row_count": 100})
+        evt.partial({"type": "db_query", "table": "orders", "duration_ms": 20, "row_count": 200})
+        evt.partial({"type": "db_query", "table": "products", "duration_ms": 30, "row_count": 50})
+
+        await evt.flush()
+
+        # Check db_query.agg was created
+        assert "db_query.agg" in flushed_partials
+        db_query_agg = flushed_partials["db_query.agg"]
+
+        assert db_query_agg["type"] == "db_query.agg"
+        assert db_query_agg["count"] == 3
+
+        # Check duration_ms aggregations
+        # Note: avg is not included because it doesn't compose in two-stage aggregation
+        # (you can't compute global avg from pre-aggregated avgs - use sum/count instead)
+        duration_agg = db_query_agg["duration_ms"]
+        assert duration_agg["sum"] == 60  # 10 + 20 + 30
+        assert duration_agg["min"] == 10
+        assert duration_agg["max"] == 30
+
+        # Check row_count aggregations (only sum configured)
+        row_count_agg = db_query_agg["row_count"]
+        assert row_count_agg["sum"] == 350  # 100 + 200 + 50
+
+    @pytest.mark.asyncio
+    async def test_should_not_create_rollup_without_agg_config(self):
+        flushed_partials: dict[str, Any] = {}
+
+        class TestCollector(LogCollectorClient):
+            async def flush(
+                self, event: WideEventBase, partials: dict[str, EventPartial]
+            ) -> None:
+                flushed_partials.update(partials)
+
+        test_collector = TestCollector()
+        service: Service = {"name": "test-service"}
+        originator: HttpOriginator = {
+            "type": "http",
+            "originator_id": "orig_123",
+            "timestamp": _now_ms(),
+            "method": "GET",
+            "path": "/test",
+        }
+
+        # Partial metadata without agg config
+        partial_metadata: dict[str, PartialMetadata] = {
+            "no_rollup": {
+                "repeatable": True,
+                "always_sample": False,
+            },
+        }
+
+        evt = wideevent(
+            service, originator, test_collector, partial_metadata=partial_metadata
+        )
+
+        evt.partial({"type": "no_rollup", "value": 10})
+        evt.partial({"type": "no_rollup", "value": 20})
+
+        await evt.flush()
+
+        # Individual partials should exist
+        assert "no_rollup" in flushed_partials
+        assert isinstance(flushed_partials["no_rollup"], list)
+        assert len(flushed_partials["no_rollup"]) == 2
+
+        # Rollup should NOT exist
+        assert "no_rollup.agg" not in flushed_partials
+
+
+class TestHistogramAggregation:
+    """Tests for histogram aggregation function"""
+
+    def test_should_compute_histogram_with_cumulative_counts(self):
+        values = [5, 15, 75, 150, 600]
+        buckets = [10, 50, 100, 250, 500, 1000]
+
+        # Create histogram AggFn and call it
+        hist_fn = histogram(buckets)
+        result = hist_fn(values)
+
+        # Cumulative counts (Prometheus-style)
+        assert result["10"] == 1  # 5 <= 10
+        assert result["50"] == 2  # 5, 15 <= 50
+        assert result["100"] == 3  # 5, 15, 75 <= 100
+        assert result["250"] == 4  # 5, 15, 75, 150 <= 250
+        assert result["500"] == 4  # same as above (no values between 250-500)
+        assert result["1000"] == 5  # all values <= 1000
+        assert result["inf"] == 5  # total count
+
+    def test_should_use_default_buckets_when_none_provided(self):
+        values = [5, 50, 500]
+
+        # histogram() without args uses DEFAULT_HISTOGRAM_BUCKETS
+        hist_fn = histogram()
+        result = hist_fn(values)
+
+        # Should use DEFAULT_HISTOGRAM_BUCKETS
+        assert "5" in result  # 5 is a default bucket
+        assert "10" in result
+        assert "100" in result
+        assert "inf" in result
+        assert result["inf"] == 3
+
+    def test_should_handle_empty_values(self):
+        hist_fn = histogram([10, 50, 100])
+        result = hist_fn([])
+
+        assert result["10"] == 0
+        assert result["50"] == 0
+        assert result["100"] == 0
+        assert result["inf"] == 0
+
+    def test_should_sort_buckets_internally(self):
+        values = [25]
+        # Unsorted buckets
+        buckets = [100, 10, 50]
+
+        hist_fn = histogram(buckets)
+        result = hist_fn(values)
+
+        # Should still work correctly
+        assert result["10"] == 0  # 25 > 10
+        assert result["50"] == 1  # 25 <= 50
+        assert result["100"] == 1  # 25 <= 100
+
+    def test_histogram_aggfn_has_correct_name(self):
+        """histogram() returns an AggFn with name 'histogram'"""
+        hist_fn = histogram([10, 50, 100])
+        assert hist_fn.name == "histogram"
+
+    @pytest.mark.asyncio
+    async def test_should_compute_histogram_in_partial_rollups(self):
+        flushed_partials: dict[str, Any] = {}
+
+        class TestCollector(LogCollectorClient):
+            async def flush(
+                self, event: WideEventBase, partials: dict[str, EventPartial]
+            ) -> None:
+                flushed_partials.update(partials)
+
+        test_collector = TestCollector()
+        service: Service = {"name": "test-service"}
+        originator: HttpOriginator = {
+            "type": "http",
+            "originator_id": "orig_123",
+            "timestamp": _now_ms(),
+            "method": "GET",
+            "path": "/test",
+        }
+
+        # Define partial metadata with histogram agg using AggFn objects
+        # histogram(buckets) returns an AggFn that computes the histogram
+        partial_metadata: dict[str, PartialMetadata] = {
+            "api_latency": {
+                "repeatable": True,
+                "always_sample": False,
+                "agg": {
+                    "latency_ms": [agg_sum, agg_min, agg_max, histogram([10, 50, 100, 250, 500])],
+                },
+            },
+        }
+
+        evt = wideevent(
+            service, originator, test_collector, partial_metadata=partial_metadata
+        )
+
+        # Add API latencies: 5ms, 15ms, 75ms, 150ms
+        evt.partial({"type": "api_latency", "endpoint": "/fast", "latency_ms": 5})
+        evt.partial({"type": "api_latency", "endpoint": "/medium1", "latency_ms": 15})
+        evt.partial({"type": "api_latency", "endpoint": "/medium2", "latency_ms": 75})
+        evt.partial({"type": "api_latency", "endpoint": "/slow", "latency_ms": 150})
+
+        await evt.flush()
+
+        # Check api_latency.agg was created
+        assert "api_latency.agg" in flushed_partials
+        agg = flushed_partials["api_latency.agg"]
+
+        assert agg["count"] == 4
+
+        # Check standard aggregations
+        latency_agg = agg["latency_ms"]
+        assert latency_agg["sum"] == 5 + 15 + 75 + 150
+        assert latency_agg["min"] == 5
+        assert latency_agg["max"] == 150
+
+        # Check histogram
+        hist = latency_agg["histogram"]
+        assert hist["10"] == 1  # 5 <= 10
+        assert hist["50"] == 2  # 5, 15 <= 50
+        assert hist["100"] == 3  # 5, 15, 75 <= 100
+        assert hist["250"] == 4  # all <= 250
+        assert hist["500"] == 4  # same
+        assert hist["inf"] == 4  # total
