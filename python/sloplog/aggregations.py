@@ -136,6 +136,63 @@ def histogram(buckets: list[int | float] | None = None) -> AggFn:
     return AggFn("histogram", compute_histogram)
 
 
+# Built-in aggregation functions by name (for hydration)
+_BUILTIN_AGG_FNS: dict[str, AggFn] = {
+    "sum": sum,
+    "min": min,
+    "max": max,
+    "count": count,
+}
+
+
+def hydrate_agg_config(
+    serialized: dict[str, list[dict[str, Any]]]
+) -> dict[str, list[AggFn]]:
+    """
+    Hydrate a serialized aggregation config into actual AggFn objects.
+
+    This is used by code-generated partial metadata to convert the serialized
+    agg config (with function names and optional configs like histogram buckets)
+    into callable AggFn objects.
+
+    Args:
+        serialized: Dict mapping field names to lists of serialized agg functions.
+                   Each serialized function has a "name" and optional "config".
+                   Example: {"duration_ms": [{"name": "sum"}, {"name": "histogram", "config": {"buckets": [10, 50, 100]}}]}
+
+    Returns:
+        Dict mapping field names to lists of AggFn objects ready for use.
+
+    Example:
+        >>> config = {"latency_ms": [{"name": "sum"}, {"name": "histogram", "config": {"buckets": [10, 50]}}]}
+        >>> hydrated = hydrate_agg_config(config)
+        >>> hydrated["latency_ms"][0].name
+        'sum'
+        >>> hydrated["latency_ms"][1].name
+        'histogram'
+    """
+    result: dict[str, list[AggFn]] = {}
+
+    for field_name, agg_specs in serialized.items():
+        agg_fns: list[AggFn] = []
+        for spec in agg_specs:
+            name = spec["name"]
+            config = spec.get("config")
+
+            if name == "histogram":
+                # Histogram needs buckets from config
+                buckets = config.get("buckets") if config else None
+                agg_fns.append(histogram(buckets))
+            elif name in _BUILTIN_AGG_FNS:
+                agg_fns.append(_BUILTIN_AGG_FNS[name])
+            else:
+                raise ValueError(f"Unknown aggregation function: {name}")
+
+        result[field_name] = agg_fns
+
+    return result
+
+
 __all__ = [
     "AggFn",
     "HistogramResult",
@@ -145,4 +202,5 @@ __all__ = [
     "count",
     "histogram",
     "DEFAULT_HISTOGRAM_BUCKETS",
+    "hydrate_agg_config",
 ]

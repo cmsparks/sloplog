@@ -24,6 +24,7 @@ from sloplog import (
     agg_max,
     histogram,
     DEFAULT_HISTOGRAM_BUCKETS,
+    hydrate_agg_config,
 )
 from sloplog.collectors import (
     stdio_collector,
@@ -850,3 +851,94 @@ class TestHistogramAggregation:
         assert hist["250"] == 4  # all <= 250
         assert hist["500"] == 4  # same
         assert hist["inf"] == 4  # total
+
+
+class TestHydrateAggConfig:
+    """Tests for hydrate_agg_config function used by codegen"""
+
+    def test_should_hydrate_builtin_agg_functions(self):
+        """hydrate_agg_config should convert serialized names to AggFn objects"""
+        serialized = {
+            "duration_ms": [{"name": "sum"}, {"name": "min"}, {"name": "max"}],
+            "row_count": [{"name": "sum"}, {"name": "count"}],
+        }
+
+        hydrated = hydrate_agg_config(serialized)
+
+        # Check duration_ms has correct AggFn objects
+        assert len(hydrated["duration_ms"]) == 3
+        assert hydrated["duration_ms"][0].name == "sum"
+        assert hydrated["duration_ms"][1].name == "min"
+        assert hydrated["duration_ms"][2].name == "max"
+
+        # Check row_count has correct AggFn objects
+        assert len(hydrated["row_count"]) == 2
+        assert hydrated["row_count"][0].name == "sum"
+        assert hydrated["row_count"][1].name == "count"
+
+    def test_should_hydrate_histogram_with_buckets(self):
+        """hydrate_agg_config should create histogram with specified buckets"""
+        serialized = {
+            "latency_ms": [
+                {"name": "sum"},
+                {"name": "histogram", "config": {"buckets": [10, 50, 100, 250, 500]}},
+            ],
+        }
+
+        hydrated = hydrate_agg_config(serialized)
+
+        assert len(hydrated["latency_ms"]) == 2
+        assert hydrated["latency_ms"][0].name == "sum"
+        assert hydrated["latency_ms"][1].name == "histogram"
+
+        # Verify the histogram works with the correct buckets
+        hist_fn = hydrated["latency_ms"][1]
+        result = hist_fn([5, 75, 150])
+
+        assert result["10"] == 1  # 5 <= 10
+        assert result["50"] == 1  # 5 <= 50
+        assert result["100"] == 2  # 5, 75 <= 100
+        assert result["250"] == 3  # all <= 250
+        assert result["500"] == 3  # same
+        assert result["inf"] == 3  # total
+
+    def test_should_hydrate_histogram_with_default_buckets(self):
+        """histogram without config uses DEFAULT_HISTOGRAM_BUCKETS"""
+        serialized = {
+            "latency_ms": [{"name": "histogram"}],
+        }
+
+        hydrated = hydrate_agg_config(serialized)
+
+        hist_fn = hydrated["latency_ms"][0]
+        assert hist_fn.name == "histogram"
+
+        # Verify it uses default buckets
+        result = hist_fn([5, 50, 500])
+        assert "5" in result  # Default bucket
+        assert "10" in result  # Default bucket
+        assert result["inf"] == 3
+
+    def test_hydrated_agg_fns_should_compute_correctly(self):
+        """Hydrated AggFn objects should compute correct values"""
+        serialized = {
+            "value": [{"name": "sum"}, {"name": "min"}, {"name": "max"}, {"name": "count"}],
+        }
+
+        hydrated = hydrate_agg_config(serialized)
+
+        values = [10, 20, 30, 40, 50]
+
+        assert hydrated["value"][0](values) == 150  # sum
+        assert hydrated["value"][1](values) == 10  # min
+        assert hydrated["value"][2](values) == 50  # max
+        assert hydrated["value"][3](values) == 5  # count
+
+    def test_should_raise_for_unknown_agg_function(self):
+        """hydrate_agg_config should raise for unknown function names"""
+        serialized = {
+            "value": [{"name": "unknown_function"}],
+        }
+
+        with pytest.raises(ValueError, match="Unknown aggregation function"):
+            hydrate_agg_config(serialized)

@@ -82,6 +82,7 @@ from .aggregations import (
     HistogramResult,
     histogram,
     DEFAULT_HISTOGRAM_BUCKETS,
+    hydrate_agg_config,
 )
 
 # Import aggregation functions with explicit names to avoid shadowing builtins
@@ -566,4 +567,5 @@ __all__ = [
     "agg_count",
     "histogram",
     "DEFAULT_HISTOGRAM_BUCKETS",
+    "hydrate_agg_config",
 ]

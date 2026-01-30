@@ -32,6 +32,8 @@ type AllowedShape = {
 export interface AggFn<V, A> {
   /** Name used as key in aggregation output */
   readonly name: string;
+  /** Optional configuration (e.g., histogram buckets) for serialization */
+  readonly config?: unknown;
   /** Compute aggregation from array of values */
   (values: V[]): A;
 }
@@ -163,7 +165,7 @@ export function histogram(buckets: number[] = DEFAULT_HISTOGRAM_BUCKETS): AggFn<
   // Sort buckets to ensure correct cumulative counting
   const sortedBuckets = [...buckets].sort((a, b) => a - b);
 
-  return agg('histogram', (values: number[]): HistogramResult => {
+  const aggFn = agg('histogram', (values: number[]): HistogramResult => {
     const result: HistogramResult = {};
 
     // Cumulative counts (Prometheus style): count of values <= boundary
@@ -176,6 +178,15 @@ export function histogram(buckets: number[] = DEFAULT_HISTOGRAM_BUCKETS): AggFn<
 
     return result;
   });
+
+  // Store buckets in config for serialization (used by codegen)
+  Object.defineProperty(aggFn, 'config', {
+    value: { buckets: sortedBuckets },
+    configurable: true,
+    writable: false,
+  });
+
+  return aggFn;
 }
 
 /**
