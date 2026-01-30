@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sloplog viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --text-muted: #6e7681;
+      --accent: #58a6ff;
+      --accent-hover: #79b8ff;
+      --error: #f85149;
+      --warning: #d29922;
+      --success: #3fb950;
+      --info: #58a6ff;
+      --border: #30363d;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+
+    .container { max-width: 1800px; margin: 0 auto; padding: 24px; }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header h1::before {
+      content: '';
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, var(--accent), #a371f7);
+      border-radius: 6px;
+    }
+
+    .file-picker {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .file-picker input[type="file"] { display: none; }
+
+    .file-picker label, button {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: all 0.15s;
+    }
+
+    .file-picker label:hover, button:hover {
+      background: var(--border);
+      border-color: var(--text-muted);
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    button.primary:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Query Info */
+    .query-info {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+
+    .query-info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .query-info-item label {
+      display: block;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .query-info-item .value {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.875rem;
+      color: var(--accent);
+    }
+
+    .query-natural {
+      grid-column: 1 / -1;
+      padding: 12px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      margin-top: 12px;
+    }
+
+    .query-natural .value {
+      color: var(--text-primary);
+      font-style: italic;
+    }
+
+    /* Layout */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 24px;
+    }
+
+    .main-layout.with-detail {
+      grid-template-columns: 1fr 550px;
+    }
+
+    @media (max-width: 1400px) {
+      .main-layout.with-detail {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Chart */
+    .chart-section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      display: none;
+    }
+
+    .chart-section.visible { display: block; }
+
+    .chart-wrapper { height: 200px; }
+
+    /* Table */
+    .table-section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .table-header h2 {
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .event-count {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .table-scroll {
+      overflow-x: auto;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8125rem;
+    }
+
+    th {
+      text-align: left;
+      padding: 12px 16px;
+      background: var(--bg-tertiary);
+      color: var(--text-muted);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    tr { transition: background 0.1s; }
+    tr:hover { background: var(--bg-tertiary); cursor: pointer; }
+    tr.selected { background: rgba(88, 166, 255, 0.1); }
+
+    .trace-id {
+      font-family: 'SF Mono', monospace;
+      color: var(--accent);
+      font-size: 0.75rem;
+    }
+
+    .event-id {
+      font-family: 'SF Mono', monospace;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .timestamp {
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .badge-error { background: rgba(248, 81, 73, 0.15); color: var(--error); }
+    .badge-warn { background: rgba(210, 153, 34, 0.15); color: var(--warning); }
+    .badge-info { background: rgba(88, 166, 255, 0.15); color: var(--info); }
+    .badge-debug { background: rgba(110, 118, 129, 0.15); color: var(--text-muted); }
+    .badge-service { background: rgba(163, 113, 247, 0.15); color: #a371f7; }
+
+    /* Trace Detail Panel */
+    .trace-panel {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: none;
+      max-height: calc(100vh - 200px);
+      overflow-y: auto;
+      position: sticky;
+      top: 24px;
+    }
+
+    .trace-panel.visible { display: block; }
+
+    .trace-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg-secondary);
+      z-index: 2;
+    }
+
+    .trace-panel-header h3 {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    .close-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+    }
+
+    .close-btn:hover { color: var(--text-primary); }
+
+    .trace-meta {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .trace-id-display {
+      font-family: 'SF Mono', monospace;
+      font-size: 0.8125rem;
+      color: var(--accent);
+      background: var(--bg-tertiary);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .copy-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.75rem;
+      padding: 4px 8px;
+    }
+
+    .copy-btn:hover { color: var(--accent); }
+
+    .trace-events-list { padding: 16px; }
+
+    .trace-event-card {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+
+    .trace-event-card-header {
+      padding: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .trace-event-card-header:hover { background: var(--border); }
+
+    .trace-event-card-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .trace-event-card-body {
+      padding: 12px;
+      border-top: 1px solid var(--border);
+      display: none;
+    }
+
+    .trace-event-card-body.expanded { display: block; }
+
+    .section-title {
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+      margin-top: 12px;
+    }
+
+    .section-title:first-child { margin-top: 0; }
+
+    .error-block {
+      background: rgba(248, 81, 73, 0.1);
+      border-left: 3px solid var(--error);
+      padding: 12px;
+      border-radius: 0 4px 4px 0;
+      margin-bottom: 8px;
+    }
+
+    .error-message { color: var(--error); font-weight: 500; margin-bottom: 4px; }
+
+    .error-stack {
+      font-family: 'SF Mono', monospace;
+      font-size: 0.6875rem;
+      color: var(--text-muted);
+      white-space: pre-wrap;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+
+    .span-block {
+      background: var(--bg-secondary);
+      border-left: 3px solid var(--info);
+      padding: 8px 12px;
+      border-radius: 0 4px 4px 0;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .span-name { font-weight: 500; }
+    .span-duration { color: var(--text-muted); font-family: 'SF Mono', monospace; font-size: 0.75rem; }
+
+    .duration-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+
+    .duration-fill {
+      height: 100%;
+      background: var(--info);
+      border-radius: 2px;
+    }
+
+    .json-viewer {
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+      font-family: 'SF Mono', monospace;
+      font-size: 0.6875rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 300px;
+      overflow-y: auto;
+      color: var(--text-secondary);
+    }
+
+    /* Empty/Loading States */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    .drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--text-muted);
+      transition: all 0.2s;
+    }
+
+    .drop-zone.drag-over {
+      border-color: var(--accent);
+      background: rgba(88, 166, 255, 0.05);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>sloplog viewer</h1>
+      <div class="file-picker">
+        <input type="file" id="fileInput" accept=".json" />
+        <label for="fileInput">Load JSON file</label>
+        <button id="loadDefaultBtn">Load default</button>
+      </div>
+    </div>
+
+    <!-- Query Info (hidden until data loaded) -->
+    <div class="query-info" id="queryInfo" style="display: none;">
+      <div class="query-info-grid">
+        <div class="query-info-item">
+          <label>Sentry Query</label>
+          <div class="value" id="sentryQuery">-</div>
+        </div>
+        <div class="query-info-item">
+          <label>Time Period</label>
+          <div class="value" id="timePeriod">-</div>
+        </div>
+        <div class="query-info-item">
+          <label>Results</label>
+          <div class="value" id="resultCount">-</div>
+        </div>
+        <div class="query-info-item">
+          <label>Fetched At</label>
+          <div class="value" id="fetchedAt">-</div>
+        </div>
+        <div class="query-natural">
+          <label>Natural Language Query</label>
+          <div class="value" id="naturalQuery">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drop Zone (shown when no data) -->
+    <div class="drop-zone" id="dropZone">
+      <div class="empty-state-icon">📂</div>
+      <p>Drop a sloplog-explore results JSON file here</p>
+      <p style="margin-top: 8px; font-size: 0.8125rem;">or click "Load JSON file" above</p>
+      <p style="margin-top: 16px; font-size: 0.75rem;">
+        Run: <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px;">./sloplog-explore -p "your query"</code>
+      </p>
+    </div>
+
+    <!-- Main Layout (hidden until data loaded) -->
+    <div class="main-layout" id="mainLayout" style="display: none;">
+      <div class="main-content">
+        <!-- Chart (for timeseries) -->
+        <div class="chart-section" id="chartSection">
+          <div class="chart-wrapper">
+            <canvas id="chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-section">
+          <div class="table-header">
+            <h2>Events</h2>
+            <span class="event-count" id="tableEventCount"></span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead id="tableHead"></thead>
+              <tbody id="tableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Trace Detail Panel -->
+      <div class="trace-panel" id="tracePanel">
+        <div class="trace-panel-header">
+          <h3>Event Details</h3>
+          <button class="close-btn" id="closePanel">&times;</button>
+        </div>
+        <div class="trace-meta">
+          <span class="trace-id-display" id="tracePanelId"></span>
+          <button class="copy-btn" id="copyTraceBtn">Copy traceId</button>
+        </div>
+        <div class="trace-events-list" id="traceEventsList"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================
+    // State
+    // ============================================
+    const state = {
+      data: null,
+      selectedEvent: null,
+      chart: null
+    };
+
+    // ============================================
+    // DOM
+    // ============================================
+    const $ = id => document.getElementById(id);
+    const dom = {
+      fileInput: $('fileInput'),
+      loadDefaultBtn: $('loadDefaultBtn'),
+      dropZone: $('dropZone'),
+      queryInfo: $('queryInfo'),
+      mainLayout: $('mainLayout'),
+      sentryQuery: $('sentryQuery'),
+      timePeriod: $('timePeriod'),
+      resultCount: $('resultCount'),
+      fetchedAt: $('fetchedAt'),
+      naturalQuery: $('naturalQuery'),
+      chartSection: $('chartSection'),
+      chart: $('chart'),
+      tableHead: $('tableHead'),
+      tableBody: $('tableBody'),
+      tableEventCount: $('tableEventCount'),
+      tracePanel: $('tracePanel'),
+      tracePanelId: $('tracePanelId'),
+      traceEventsList: $('traceEventsList'),
+      closePanel: $('closePanel'),
+      copyTraceBtn: $('copyTraceBtn')
+    };
+
+    // ============================================
+    // File Loading
+    // ============================================
+    dom.fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) loadFile(file);
+    });
+
+    dom.loadDefaultBtn.addEventListener('click', async () => {
+      try {
+        const response = await fetch('.sloplog-explore-results.json');
+        if (!response.ok) throw new Error('File not found');
+        const data = await response.json();
+        loadData(data);
+      } catch (err) {
+        alert('Could not load default file. Run sloplog-explore first.');
+      }
+    });
+
+    // Drag and drop
+    dom.dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dom.dropZone.classList.add('drag-over');
+    });
+
+    dom.dropZone.addEventListener('dragleave', () => {
+      dom.dropZone.classList.remove('drag-over');
+    });
+
+    dom.dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dom.dropZone.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && file.name.endsWith('.json')) {
+        loadFile(file);
+      }
+    });
+
+    function loadFile(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          loadData(data);
+        } catch (err) {
+          alert('Invalid JSON file');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // ============================================
+    // Data Loading
+    // ============================================
+    function loadData(data) {
+      state.data = data;
+
+      // Show UI
+      dom.dropZone.style.display = 'none';
+      dom.queryInfo.style.display = 'block';
+      dom.mainLayout.style.display = 'grid';
+
+      // Populate query info
+      if (data.query) {
+        dom.sentryQuery.textContent = data.query.sentry || '-';
+        dom.timePeriod.textContent = data.query.period || '-';
+        dom.naturalQuery.textContent = data.query.natural || '-';
+      }
+
+      if (data.meta) {
+        dom.resultCount.textContent = data.meta.count || '0';
+        dom.fetchedAt.textContent = data.meta.timestamp
+          ? new Date(data.meta.timestamp).toLocaleString()
+          : '-';
+      }
+
+      // Render based on type
+      if (data.query?.type === 'timeseries' && data.results?.timeSeries) {
+        renderTimeseries(data.results);
+      } else if (data.results?.data) {
+        renderTable(data.results.data, data.query?.fields || guessFields(data.results.data));
+      }
+    }
+
+    function guessFields(events) {
+      if (!events.length) return [];
+      // Get all unique keys from first few events
+      const keys = new Set();
+      events.slice(0, 5).forEach(e => Object.keys(e).forEach(k => keys.add(k)));
+      // Prioritize certain fields
+      const priority = ['eventId', 'traceId', 'timestamp', 'service.name', 'originator.type', 'error.0.message'];
+      const sorted = [...keys].sort((a, b) => {
+        const ai = priority.indexOf(a);
+        const bi = priority.indexOf(b);
+        if (ai >= 0 && bi >= 0) return ai - bi;
+        if (ai >= 0) return -1;
+        if (bi >= 0) return 1;
+        return a.localeCompare(b);
+      });
+      return sorted.slice(0, 10); // Limit columns
+    }
+
+    // ============================================
+    // Rendering
+    // ============================================
+    function renderTable(events, fields) {
+      // Header
+      dom.tableHead.innerHTML = `<tr>${fields.map(f =>
+        `<th>${escapeHtml(f.split('.').pop())}</th>`
+      ).join('')}</tr>`;
+
+      // Body
+      dom.tableBody.innerHTML = events.map((event, idx) => `
+        <tr data-idx="${idx}">
+          ${fields.map(f => `<td>${formatCell(f, event[f])}</td>`).join('')}
+        </tr>
+      `).join('');
+
+      dom.tableEventCount.textContent = `${events.length} events`;
+
+      // Click handlers
+      dom.tableBody.querySelectorAll('tr').forEach(row => {
+        row.addEventListener('click', () => {
+          const idx = parseInt(row.dataset.idx);
+          selectEvent(events[idx], row);
+        });
+      });
+    }
+
+    function formatCell(field, value) {
+      if (value === null || value === undefined) {
+        return '<span style="color: var(--text-muted)">-</span>';
+      }
+
+      if (field === 'traceId') {
+        return `<span class="trace-id">${escapeHtml(String(value).slice(0, 12))}...</span>`;
+      }
+      if (field === 'eventId') {
+        return `<span class="event-id">${escapeHtml(String(value))}</span>`;
+      }
+      if (field === 'timestamp') {
+        return `<span class="timestamp">${new Date(value).toLocaleString()}</span>`;
+      }
+      if (field === 'service.name') {
+        return `<span class="badge badge-service">${escapeHtml(String(value))}</span>`;
+      }
+      if (field.includes('.level') || field === 'level') {
+        const level = String(value).toLowerCase();
+        const cls = level.includes('error') || level === 'fatal' ? 'error' :
+                    level === 'warn' ? 'warn' :
+                    level === 'info' ? 'info' : 'debug';
+        return `<span class="badge badge-${cls}">${escapeHtml(value)}</span>`;
+      }
+      if (field.includes('durationMs')) {
+        return `${Number(value).toFixed(0)}ms`;
+      }
+
+      return escapeHtml(String(value));
+    }
+
+    function renderTimeseries(data) {
+      dom.chartSection.classList.add('visible');
+
+      if (state.chart) state.chart.destroy();
+
+      const series = data.timeSeries?.[0];
+      if (!series) return;
+
+      const labels = series.values.map(v => new Date(v.timestamp).toLocaleString());
+      const values = series.values.map(v => v.value);
+
+      state.chart = new Chart(dom.chart, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: series.yAxis || 'count()',
+            data: values,
+            borderColor: '#58a6ff',
+            backgroundColor: 'rgba(88, 166, 255, 0.1)',
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: '#8b949e' } }
+          },
+          scales: {
+            x: { ticks: { color: '#6e7681', maxRotation: 45 }, grid: { color: '#30363d' } },
+            y: { ticks: { color: '#6e7681' }, grid: { color: '#30363d' } }
+          }
+        }
+      });
+    }
+
+    function selectEvent(event, row) {
+      state.selectedEvent = event;
+
+      // Update table selection
+      dom.tableBody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
+
+      // Show panel
+      dom.tracePanel.classList.add('visible');
+      dom.mainLayout.classList.add('with-detail');
+
+      // Populate panel
+      dom.tracePanelId.textContent = event.traceId || event.eventId || '-';
+
+      dom.traceEventsList.innerHTML = renderEventDetail(event);
+
+      // Add expand handlers
+      dom.traceEventsList.querySelectorAll('.trace-event-card-header').forEach(header => {
+        header.addEventListener('click', () => {
+          header.nextElementSibling.classList.toggle('expanded');
+        });
+      });
+    }
+
+    function renderEventDetail(event) {
+      let html = `
+        <div class="trace-event-card">
+          <div class="trace-event-card-header">
+            <div class="trace-event-card-meta">
+              ${event['service.name'] ? `<span class="badge badge-service">${escapeHtml(event['service.name'])}</span>` : ''}
+              <span class="event-id">${escapeHtml(event.eventId || '')}</span>
+              ${event['originator.type'] === 'http'
+                ? `<span>${escapeHtml(event['originator.method'] || '')} ${escapeHtml(event['originator.path'] || '')}</span>`
+                : event['originator.type'] ? `<span>${escapeHtml(event['originator.type'])}</span>` : ''
+              }
+            </div>
+            <span class="timestamp">${event.timestamp ? new Date(event.timestamp).toLocaleString() : ''}</span>
+          </div>
+          <div class="trace-event-card-body expanded">
+            ${renderEventSections(event)}
+          </div>
+        </div>
+      `;
+
+      return html;
+    }
+
+    function renderEventSections(event) {
+      let html = '';
+
+      // Errors
+      const errors = [];
+      for (let i = 0; i < 10; i++) {
+        if (event[`error.${i}.message`]) {
+          errors.push({
+            message: event[`error.${i}.message`],
+            stack: event[`error.${i}.stack`],
+            code: event[`error.${i}.code`]
+          });
+        }
+      }
+      if (errors.length) {
+        html += `<div class="section-title">Errors</div>`;
+        html += errors.map(e => `
+          <div class="error-block">
+            <div class="error-message">${escapeHtml(e.message)}</div>
+            ${e.code ? `<div style="color: var(--text-muted); font-size: 0.75rem;">Code: ${e.code}</div>` : ''}
+            ${e.stack ? `<div class="error-stack">${escapeHtml(e.stack)}</div>` : ''}
+          </div>
+        `).join('');
+      }
+
+      // Spans
+      const spans = [];
+      for (let i = 0; i < 10; i++) {
+        if (event[`span.${i}.name`]) {
+          spans.push({
+            name: event[`span.${i}.name`],
+            duration: event[`span.${i}.durationMs`]
+          });
+        }
+      }
+      if (spans.length) {
+        const maxDuration = Math.max(...spans.map(s => s.duration || 0));
+        html += `<div class="section-title">Spans</div>`;
+        html += spans.map(s => `
+          <div class="span-block">
+            <span class="span-name">${escapeHtml(s.name)}</span>
+            <span class="span-duration">${s.duration ? s.duration.toFixed(0) + 'ms' : '-'}</span>
+          </div>
+          ${s.duration ? `
+            <div class="duration-bar" style="margin: -6px 0 6px 0;">
+              <div class="duration-fill" style="width: ${(s.duration / maxDuration * 100).toFixed(0)}%"></div>
+            </div>
+          ` : ''}
+        `).join('');
+      }
+
+      // Log messages
+      const logs = [];
+      for (let i = 0; i < 10; i++) {
+        if (event[`log_message.${i}.message`]) {
+          logs.push({
+            message: event[`log_message.${i}.message`],
+            level: event[`log_message.${i}.level`]
+          });
+        }
+      }
+      if (logs.length) {
+        html += `<div class="section-title">Log Messages</div>`;
+        html += logs.map(l => {
+          const cls = l.level?.includes('error') || l.level === 'fatal' ? 'error' :
+                      l.level === 'warn' ? 'warn' :
+                      l.level === 'info' ? 'info' : 'debug';
+          return `
+            <div style="margin-bottom: 6px;">
+              <span class="badge badge-${cls}">${l.level || 'info'}</span>
+              <span style="margin-left: 8px;">${escapeHtml(l.message)}</span>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // Raw JSON
+      html += `<div class="section-title">Raw Event</div>`;
+      html += `<div class="json-viewer">${escapeHtml(JSON.stringify(event, null, 2))}</div>`;
+
+      return html;
+    }
+
+    // ============================================
+    // Utils
+    // ============================================
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // ============================================
+    // Event Handlers
+    // ============================================
+    dom.closePanel.addEventListener('click', () => {
+      dom.tracePanel.classList.remove('visible');
+      dom.mainLayout.classList.remove('with-detail');
+      dom.tableBody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
+    });
+
+    dom.copyTraceBtn.addEventListener('click', () => {
+      const text = state.selectedEvent?.traceId || state.selectedEvent?.eventId || '';
+      navigator.clipboard.writeText(text);
+      dom.copyTraceBtn.textContent = 'Copied!';
+      setTimeout(() => dom.copyTraceBtn.textContent = 'Copy traceId', 1500);
+    });
+
+    // ============================================
+    // Auto-load default on page load
+    // ============================================
+    (async () => {
+      try {
+        const response = await fetch('.sloplog-explore-results.json');
+        if (response.ok) {
+          const data = await response.json();
+          loadData(data);
+        }
+      } catch (e) {
+        // Ignore - show drop zone
+      }
+    })();
+  </script>
+</body>
+</html>

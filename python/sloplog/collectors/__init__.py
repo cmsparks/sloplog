@@ -31,6 +31,9 @@ from .base import (
 # Stdio collector - no external dependencies
 from .stdio import StdioCollector, stdio_collector
 
+# File collector - requires aiofiles (optional)
+from .file import FileCollector, file_collector
+
 __all__ = [
     # Base types
     "LogCollectorClient",
@@ -43,8 +46,10 @@ __all__ = [
     "CompositeCollector",
     "FilteredCollector",
     "StdioCollector",
+    "FileCollector",
     # Factory functions
     "composite_collector",
     "filtered_collector",
     "stdio_collector",
+    "file_collector",
 ]

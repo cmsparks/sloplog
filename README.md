@@ -132,6 +132,81 @@ Partials are added to a WideEvent via:
 
 Partials are always preferred over `log_message` for structured data. Usage errors (partial overwrites or span misuse) are emitted as `sloplog_usage_error` on flush.
 
+## Aggregations
+
+sloplog uses **two-stage aggregation** to compute statistics that work with typical structured logging platforms:
+
+1. **Stage 1 (flush time):** Aggregate repeatable partials within a single wide event into flat keys like `db_query.agg.durationMs.sum`
+2. **Stage 2 (query time):** Use your logging platform's SQL/aggregation to combine across events: `SUM("db_query.agg.durationMs.sum")`
+
+This works because the output is flat key-value pairs that any logging platform can query—no nested arrays or special data types.
+
+### Basic Aggregations
+
+```ts
+const dbQuery = partial('db_query', {
+  table: z.string(),
+  durationMs: z.number(),
+}, {
+  repeatable: true,
+  agg: { durationMs: [sum, avg, min, max] },
+});
+```
+
+Output after flush:
+
+```json
+{
+  "db_query.agg": {
+    "count": 2,
+    "durationMs": { "sum": 30, "avg": 15, "min": 10, "max": 20 }
+  }
+}
+```
+
+Built-in functions: `sum`, `avg`, `min`, `max`, `count`. These all compose correctly—you can `SUM(sum)`, `MIN(min)`, `MAX(max)`, and compute avg from `SUM(sum)/SUM(count)`.
+
+### Histogram Aggregation for Percentiles
+
+Percentiles (p50, p95, p99) don't compose—you can't compute a global p95 from pre-aggregated p95 values. The `histogram` aggregation solves this using Prometheus-style cumulative buckets:
+
+```ts
+const apiCall = partial('api_call', {
+  latencyMs: z.number(),
+}, {
+  repeatable: true,
+  agg: { latencyMs: [sum, histogram([10, 50, 100, 250, 500, 1000])] },
+});
+```
+
+Output:
+
+```json
+{
+  "api_call.agg.latencyMs.histogram": { "10": 1, "50": 2, "100": 3, "250": 4, "1000": 5, "inf": 5 }
+}
+```
+
+Each bucket is a cumulative count (values ≤ boundary). Bucket counts are additive, so at query time you `SUM` each bucket across events, then interpolate to find percentiles.
+
+### Python
+
+```python
+partial_metadata = {
+    "api_call": {
+        "repeatable": True,
+        "agg": { "latency_ms": ["sum", "avg", "histogram"] },
+    },
+}
+evt = wideevent(service, originator, collector, partial_metadata=partial_metadata)
+```
+
+Use `set_histogram_buckets("api_call.latency_ms", [10, 50, 100, 250, 500])` for custom buckets.
+
+### Automatic Span Aggregations
+
+Spans are automatically aggregated by name—no configuration needed. Output includes `span.agg.{name}.count`, `span.agg.{name}.duration.total/min/max`.
+
 ## Built-in partials (separate module)
 
 sloplog ships a small set of built-in partials for convenience. These are intentionally separate from the core API and may change.

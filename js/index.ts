@@ -1,6 +1,7 @@
 import type { ZodRawShape } from 'zod';
 import type { LogCollectorClient } from './collectors/index.js';
 import { extractPartialMetadata } from './registry.js';
+import type { RuntimeAggConfig, AggFn } from './registry.js';
 
 // Re-export collectors from main entry point for easier bundler compatibility
 export * from './collectors/index.js';
@@ -26,7 +27,7 @@ function nanoId(): string {
 }
 
 /** Current sloplog library version (propagated onto Service). */
-export const SLOPLOG_VERSION = '0.0.6';
+export const SLOPLOG_VERSION = '0.0.16';
 /** Default language marker when Service.sloplogLanguage is not set. */
 const SLOPLOG_LANGUAGE = 'typescript';
 
@@ -210,6 +211,68 @@ export type {
 // Node.js-specific code (pathToFileURL, node:fs) in React Native / browser environments.
 // Import from 'sloplog/codegen' directly when you need codegen functionality.
 
+// Re-export aggregation functions and types
+// Note: `agg()` is intentionally NOT exported - custom agg functions would not work
+// in Python codegen. Use the built-in aggregation functions instead.
+export {
+  sum,
+  min,
+  max,
+  count,
+  histogram,
+  DEFAULT_HISTOGRAM_BUCKETS,
+  type AggFn,
+  type NumericAggFn,
+  type StringAggFn,
+  type BooleanAggFn,
+  type AggConfig,
+  type RuntimeAggConfig,
+  type HistogramResult,
+} from './registry.js';
+
+/**
+ * Span duration aggregation structure.
+ */
+export interface SpanDurationAggregation {
+  /** Total duration across all spans in milliseconds */
+  total: number;
+  /** Minimum duration in milliseconds */
+  min: number;
+  /** Maximum duration in milliseconds */
+  max: number;
+}
+
+/**
+ * Span aggregation rollup structure.
+ * Stored as `span.agg.[name]` in the wide event.
+ */
+export interface SpanAggregation {
+  /** Number of spans with this name */
+  count: number;
+  /** Duration aggregations */
+  duration: SpanDurationAggregation;
+}
+
+/**
+ * Map of span names to their aggregated statistics.
+ * This is what gets stored at the `span.agg` key in the wide event.
+ */
+export type SpanAggregations = Record<string, SpanAggregation>;
+
+/**
+ * Compute aggregations using provided aggregation functions.
+ */
+function computeAggregations(
+  values: unknown[],
+  aggFns: AggFn<unknown, unknown>[],
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const fn of aggFns) {
+    result[fn.name] = fn(values);
+  }
+  return result;
+}
+
 /**
  * Core WideEvent class.
  * Create one WideEvent per request or unit of work and add partials as you go.
@@ -224,6 +287,7 @@ export class WideEvent<R extends RegistryShape> {
   private partials = new Map<string, EventPartial<string> | EventPartial<string>[]>();
   private service: Service;
   private originator: import('./originator/index.js').Originator;
+  /** Open spans: name -> array of start times (stack for nested same-name spans) */
   private openSpans = new Map<string, number[]>();
   /** Metadata about partials (repeatable, alwaysSample) */
   private partialMetadata: Map<string, PartialMetadata>;
@@ -469,9 +533,12 @@ export class WideEvent<R extends RegistryShape> {
    * Emit the full wide log to the collector.
    * Any usage errors (e.g. unended spans, partial overwrites) are emitted
    * as sloplog_usage_error partials before flushing.
+   * Automatic span rollups and opt-in partial rollups are computed before flush.
    */
   async flush(): Promise<void> {
     this.recordOpenSpans();
+    this.computeSpanRollups();
+    this.computePartialRollups();
     await this.collector.flush(
       {
         eventId: this.eventId,
@@ -562,6 +629,101 @@ export class WideEvent<R extends RegistryShape> {
     }
 
     this.openSpans.clear();
+  }
+
+  /**
+   * Compute automatic span rollups.
+   * Groups spans by name and computes aggregation statistics.
+   * Stores result as `span.agg` partial with shape { [name]: SpanAggregation }
+   */
+  private computeSpanRollups(): void {
+    const spans = this.partials.get('span');
+    if (!spans || !Array.isArray(spans) || spans.length === 0) {
+      return;
+    }
+
+    // Group spans by name
+    const spansByName = new Map<string, { durationMs: number }[]>();
+    for (const span of spans) {
+      const name = span.name as string;
+      const durationMs = span.durationMs as number;
+      if (typeof name === 'string' && typeof durationMs === 'number') {
+        const existing = spansByName.get(name);
+        if (existing) {
+          existing.push({ durationMs });
+        } else {
+          spansByName.set(name, [{ durationMs }]);
+        }
+      }
+    }
+
+    // Compute aggregations for each span name
+    const aggregations: SpanAggregations = {};
+    for (const [name, spanList] of spansByName) {
+      const durations = spanList.map((s) => s.durationMs);
+      const count = durations.length;
+      const total = durations.reduce((a, b) => a + b, 0);
+      const min = Math.min(...durations);
+      const max = Math.max(...durations);
+
+      aggregations[name] = {
+        count,
+        duration: { total, min, max },
+      };
+    }
+
+    // Store as span.agg partial (singular, not repeatable)
+    this.partials.set('span.agg', { type: 'span.agg', ...aggregations });
+  }
+
+  /**
+   * Compute opt-in rollups for repeatable partials that have agg config.
+   * Stores result as `[partial_name].agg` with shape { count, [field]: { [aggName]: value } }
+   */
+  private computePartialRollups(): void {
+    for (const [type, partialsOrPartial] of this.partials) {
+      // Skip non-array entries (singular partials) and span (handled separately)
+      if (!Array.isArray(partialsOrPartial) || type === 'span') {
+        continue;
+      }
+
+      const metadata = this.partialMetadata.get(type);
+      if (!metadata?.agg) {
+        continue;
+      }
+
+      const aggConfig = metadata.agg;
+      const partialList = partialsOrPartial as EventPartial<string>[];
+
+      if (partialList.length === 0) {
+        continue;
+      }
+
+      // Build the aggregation result
+      const aggResult: Record<string, unknown> = {
+        type: `${type}.agg`,
+        count: partialList.length,
+      };
+
+      // Compute aggregations for each configured field
+      for (const [fieldName, aggFns] of Object.entries(aggConfig)) {
+        const values: unknown[] = [];
+        for (const partial of partialList) {
+          const value = partial[fieldName];
+          if (value !== undefined) {
+            values.push(value);
+          }
+        }
+
+        if (values.length > 0) {
+          const fieldAggs = computeAggregations(values, aggFns);
+          aggResult[fieldName] = fieldAggs;
+        }
+      }
+
+      // Store as [partial_name].agg partial (singular)
+      this.partials.set(`${type}.agg`, aggResult as EventPartial<string>);
+    }
   }
 }
 

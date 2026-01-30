@@ -5,7 +5,28 @@
  */
 
 import type { ZodTypeAny, ZodObject, ZodRawShape } from 'zod';
-import type { PartialDefinition, Registry } from './registry.js';
+import type { PartialDefinition, Registry, AggFn, PartialOptionsWithAgg } from './registry.js';
+
+/**
+ * Serialized representation of an aggregation function.
+ * Used for code generation to Python.
+ */
+interface SerializedAggFn {
+  name: string;
+  config?: Record<string, unknown>;
+}
+
+/**
+ * Serialize an AggFn to a format that can be code-generated.
+ * Extracts the name and any config (e.g., histogram buckets).
+ */
+function serializeAggFn(aggFn: AggFn<unknown, unknown>): SerializedAggFn {
+  const serialized: SerializedAggFn = { name: aggFn.name };
+  if (aggFn.config !== undefined) {
+    serialized.config = aggFn.config as Record<string, unknown>;
+  }
+  return serialized;
+}
 
 // Helper to detect Zod type info
 interface ZodFieldInfo {
@@ -356,7 +377,7 @@ function zodFieldInfoToPython(info: ZodFieldInfo): { type: string; needsLiteral:
  * Generate Python TypedDicts for a registry
  */
 export function generatePython(reg: Registry<PartialDefinition<string, ZodRawShape>[]>): string {
-  const typingImports = ['TypedDict'];
+  const typingImports = ['TypedDict', 'Any'];
   const needsLiteral = reg.partials.some((partial) =>
     getSchemaEntries(partial.schema).some(
       ([, zodType]) => getZodFieldInfo(zodType).enumValues?.length,
@@ -469,12 +490,43 @@ export function generatePython(reg: Registry<PartialDefinition<string, ZodRawSha
   }
   lines.push('');
 
+  // Check if any partials have agg config
+  const hasAggConfig = reg.partials.some((partial) => {
+    const opts = partial.options as PartialOptionsWithAgg<ZodRawShape>;
+    return opts.agg !== undefined;
+  });
+
   // Generate PartialMetadata TypedDict
-  lines.push('class PartialMetadata(TypedDict):');
-  lines.push('    """Metadata about a partial type"""');
+  lines.push('class _PartialMetadataRequired(TypedDict):');
+  lines.push('    """Required fields for partial metadata"""');
   lines.push('    repeatable: bool');
   lines.push('    always_sample: bool');
   lines.push('');
+  lines.push('');
+  lines.push('class PartialMetadata(_PartialMetadataRequired, total=False):');
+  lines.push('    """Metadata about a partial type"""');
+  lines.push('    agg: dict[str, list[Any]]  # Maps field names to list of AggFn objects');
+  lines.push('');
+
+  // Generate serialized agg config if any partials use it
+  if (hasAggConfig) {
+    lines.push('');
+    lines.push('# Serialized aggregation configs (hydrated at runtime)');
+    lines.push('# Format: { field_name: [{ "name": "sum" }, { "name": "histogram", "config": { "buckets": [...] } }] }');
+    lines.push('_SERIALIZED_AGG_CONFIGS: dict[str, dict[str, list[dict[str, Any]]]] = {');
+    for (const partial of reg.partials) {
+      const opts = partial.options as PartialOptionsWithAgg<ZodRawShape>;
+      if (opts.agg) {
+        const serializedAgg: Record<string, SerializedAggFn[]> = {};
+        for (const [fieldName, aggFns] of Object.entries(opts.agg)) {
+          serializedAgg[toSnakeCase(fieldName)] = (aggFns as AggFn<unknown, unknown>[]).map(serializeAggFn);
+        }
+        lines.push(`    "${partial.name}": ${JSON.stringify(serializedAgg)},`);
+      }
+    }
+    lines.push('}');
+    lines.push('');
+  }
 
   // Generate partial metadata dict for runtime use
   lines.push('# Runtime metadata for partials');
@@ -488,6 +540,22 @@ export function generatePython(reg: Registry<PartialDefinition<string, ZodRawSha
   }
   lines.push('}');
   lines.push('');
+
+  // If we have agg configs, generate the hydration call
+  if (hasAggConfig) {
+    lines.push('');
+    lines.push('def _hydrate_partial_metadata() -> None:');
+    lines.push('    """Hydrate serialized agg configs into actual AggFn objects."""');
+    lines.push('    from sloplog import hydrate_agg_config');
+    lines.push('    for partial_name, serialized_agg in _SERIALIZED_AGG_CONFIGS.items():');
+    lines.push('        if partial_name in PARTIAL_METADATA:');
+    lines.push('            PARTIAL_METADATA[partial_name]["agg"] = hydrate_agg_config(serialized_agg)');
+    lines.push('');
+    lines.push('');
+    lines.push('# Hydrate agg configs on module load');
+    lines.push('_hydrate_partial_metadata()');
+    lines.push('');
+  }
 
   // Export list
   lines.push('__all__ = [');
